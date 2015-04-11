@@ -2,14 +2,14 @@
 #define CS380C_ASSIGNMENT1_H
 
 
-#include <llvm/IR/Module.h>
-#include <llvm/IR/Function.h>
-#include <llvm/IR/BasicBlock.h>
-#include <llvm/IR/GlobalValue.h>
-#include <llvm/IR/Constants.h>
-#include <llvm/Analysis/CallGraph.h>
-#include <llvm/Support/raw_ostream.h>
-#include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include "llvm/Pass.h"
 #include "llvm/IR/Instructions.h"
@@ -30,7 +30,10 @@ private:
 
 	void setEnv(llvm::Module& M);
 	unsigned getStrideWidth(llvm::Type *type);
+	uint64_t getArraySize(llvm::Type *type);
+
 	void annotateAllocaInst(llvm::AllocaInst *inst);
+	void annotateMalloc(llvm::CallInst *inst);
 
 public:
 	static char ID;

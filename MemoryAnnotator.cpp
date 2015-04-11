@@ -25,10 +25,15 @@ void MemoryAnnotator::setEnv(Module& M)
 	SizeTy = Type::getInt64Ty(module->getContext());
 	Int32Ty = Type::getInt32Ty(module->getContext());
 
-	Type *types[4] = {VoidPtrTy, Int32Ty, SizeTy, SizeTy};
+	Type *types[] = {VoidPtrTy, SizeTy, SizeTy, SizeTy};
 	FunctionType *trackStackAllocaTy = FunctionType::get( VoidTy, types, false );
 	allocaTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation", module );
 	// module->getOrInsertFunction("__track_stack_allocation", allocaTrack);
+
+	Type *types2[] = {VoidPtrTy, SizeTy};
+	FunctionType *trackHeapAllocaTy = FunctionType::get( VoidTy, types2, false );
+	mallocTrack = Function::Create( trackHeapAllocaTy, Function::ExternalLinkage, "__track_heap_allocation", module );
+
 }
 
 void MemoryAnnotator::annotateFunction(Function& F)
@@ -51,43 +56,96 @@ void MemoryAnnotator::annotateBasicBlock(BasicBlock& BB)
 
 unsigned MemoryAnnotator::getStrideWidth(Type *type) 
 {
+	if (type->isHalfTy()) 
+		return 16;
+
+	if (type->isFloatTy()) 
+		return 32;
+
+	if (type->isDoubleTy()) 
+		return 64;
+
+	if (type->isArrayTy()) {
+		ArrayType *arrayTy = dyn_cast<ArrayType>(type);
+		return getStrideWidth( arrayTy->getElementType() );
+	}
+
 	if (isa<IntegerType>(type)) {
 		IntegerType *int_type = dyn_cast<IntegerType>(type);
 		return int_type->getBitWidth();
 	}
 
-	outs() << "WARNING: non-integer types require handling of struct/floating types\n";
+	outs() << "WARNING: non-integer types require handling of struct types\n";
 
 	return 0;
+}
+
+uint64_t MemoryAnnotator::getArraySize(Type *type) 
+{
+	if (type->isArrayTy()) {
+		ArrayType *arrayTy = dyn_cast<ArrayType>(type);
+		return arrayTy->getNumElements();
+	} else
+		return 1;
 }
 
 void MemoryAnnotator::annotateAllocaInst(AllocaInst *inst)
 {
 	outs() << "----" << *inst << "----\n";
 
-	Type *allocatedTy = inst->getAllocatedType();
+	// alignment
 	unsigned align = inst->getAlignment();
-	Value *arraySize = inst->getArraySize();
 	Constant *alignment = ConstantInt::get( SizeTy, align );
+
+	// Array Size and Stride Size
+	Type *allocatedTy = inst->getAllocatedType();
+	Value *arraySize = nullptr;
 	Constant *stride = ConstantInt::get( SizeTy, getStrideWidth(allocatedTy) );
+
+	if (inst->isArrayAllocation()) {
+		outs() << "WARNING: this is array allocation for AllocaInst\n";
+		arraySize = inst->getArraySize();
+		if ( !arraySize->getType()->isIntegerTy(64) ) {
+			CastInst *castArg2 = CastInst::CreateIntegerCast (arraySize, SizeTy, false);
+			castArg2->insertBefore(inst);
+			arraySize = castArg2;
+		}
+	} else {
+		// if this is a array or not
+		uint64_t array = getArraySize(allocatedTy);
+		arraySize = ConstantInt::get( SizeTy, array );
+	}
 
 	if (!inst->isStaticAlloca()) {
 		outs() << "WARNING: non-static alloca require handling of stack save/restore\n";
-		CastInst *castArg2 = CastInst::CreateIntegerCast (arraySize, Int32Ty, false);
-		castArg2->insertBefore(inst);
-		arraySize = castArg2;
 	}
 
+	// Allocated Ptr 
 	CastInst *cast = CastInst::CreatePointerCast (inst, VoidPtrTy);
 	cast->insertAfter(inst);
 	
 	Value *args[4] = {cast, arraySize, stride, alignment};
 	ArrayRef<Value *> argArray(args, 4);
-	outs() << *cast << " " << *arraySize << " " << *stride << " " << *alignment << "\n";
+	outs() << *cast << ", array=[" << *arraySize << "], stride=" << *stride << ", align" << *alignment << "\n";
 	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_allocation"), argArray );
 	tracker->insertAfter(cast);
 	outs() << "----------------------------\n";
 }
+
+void MemoryAnnotator::annotateMalloc(CallInst *inst)
+{
+	outs() << "--------" << *inst << "--------\n";
+
+	Value *mallocSize = inst->getArgOperand(0);
+	
+	Value *args[2] = {inst, mallocSize};
+	ArrayRef<Value *> argArray(args, 2);
+	outs() << *inst << " " << *mallocSize << "\n";
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_allocation"), argArray );
+	tracker->insertAfter(inst);
+	outs() << "----------------------------------------------------\n";
+}
+
 
 void MemoryAnnotator::annotateInstruction(Instruction& I)
 {
@@ -95,6 +153,19 @@ void MemoryAnnotator::annotateInstruction(Instruction& I)
 	if (isa<AllocaInst>(inst)) {
 		AllocaInst *alloca = dyn_cast<AllocaInst> (inst);
 		annotateAllocaInst(alloca);
+	}
+
+	if (isa<CallInst>(inst)) {
+		CallInst *call = dyn_cast<CallInst> (inst);
+		Function *callee = call->getCalledFunction();
+		if (callee == nullptr) {
+			outs() << "WARNING: An indirect call may require special care\n";
+			return;
+		}
+
+		if (callee->getName() == "malloc") {
+			annotateMalloc(call);
+		}
 	}
 
 }

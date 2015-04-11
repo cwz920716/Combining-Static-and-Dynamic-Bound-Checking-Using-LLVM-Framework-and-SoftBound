@@ -1,11 +1,14 @@
 #! /bin/sh
 
-rm -f *.ll *.bc ./input ./output
+rm -f *.ll *.bc ./input ./output build/*
 make clean
-clang -emit-llvm -c example/$1.c
-opt -mem2reg -instnamer $1.bc -o input.bc
-llvm-dis input.bc -o input.ll
+clang -emit-llvm -c example/$1.c -o build/$1.bc
+opt -mem2reg -instnamer build/$1.bc -o build/input.bc
+llvm-dis build/input.bc -o build/input.ll
 make
-echo ----Memory Annotate----
-opt -load ./mannotate.so -mannotate input.bc -o output.bc  
-llvm-dis output.bc -o output.ll
+echo "<<<< Memory Annotate... >>>>"
+opt -load ./mannotate.so -mannotate build/input.bc -o build/output.bc  
+llvm-dis build/output.bc -o build/output.ll
+echo "<<<< Linking... >>>>"
+clang -O3 build/output.bc ./lib/libtrack.a -o build/output
+objdump -d build/output > build/output-dis.ll
