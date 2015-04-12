@@ -27,7 +27,7 @@ void MemoryAnnotator::setEnv(Module& M)
 
 	Type *types[] = {VoidPtrTy, SizeTy, SizeTy, SizeTy};
 	FunctionType *trackStackAllocaTy = FunctionType::get( VoidTy, types, false );
-	allocaStackTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation", module );
+	allocaStackTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation_integer", module );
 	// module->getOrInsertFunction("__track_stack_allocation", allocaTrack);
 
 	Type *types2[] = {VoidPtrTy, SizeTy};
@@ -38,9 +38,11 @@ void MemoryAnnotator::setEnv(Module& M)
 	FunctionType *trackHeapFreeTy = FunctionType::get( VoidTy, types3, false );
 	freeTrack = Function::Create( trackHeapFreeTy, Function::ExternalLinkage, "__track_heap_free", module );
 
-	Type *types4[] = {VoidPtrTy, SizeTy, SizeTy};
+	Type *types4[] = {VoidPtrTy, SizeTy, SizeTy, SizeTy};
 	FunctionType *trackLoadTy = FunctionType::get( VoidTy, types4, false );
-	loadTrack = Function::Create( trackLoadTy, Function::ExternalLinkage, "__track_load", module );
+	loadTrack = Function::Create( trackLoadTy, Function::ExternalLinkage, "__track_load_integer", module );
+	FunctionType *trackStoreTy = FunctionType::get( VoidTy, types4, false );
+	storeTrack = Function::Create( trackStoreTy, Function::ExternalLinkage, "__track_store_integer", module );
 
 }
 
@@ -64,15 +66,6 @@ void MemoryAnnotator::annotateBasicBlock(BasicBlock& BB)
 
 unsigned MemoryAnnotator::getStrideWidth(Type *type) 
 {
-	if (type->isHalfTy()) 
-		return 16;
-
-	if (type->isFloatTy()) 
-		return 32;
-
-	if (type->isDoubleTy()) 
-		return 64;
-
 	if (type->isArrayTy()) {
 		ArrayType *arrayTy = dyn_cast<ArrayType>(type);
 		return getStrideWidth( arrayTy->getElementType() );
@@ -83,7 +76,18 @@ unsigned MemoryAnnotator::getStrideWidth(Type *type)
 		return int_type->getBitWidth();
 	}
 
-	outs() << "WARNING: non-integer types require handling of struct types\n";
+	outs() << "WARNING: non-integer types require handling of struct/floating types\n";
+
+	if (type->isHalfTy()) 
+		return 16;
+
+	if (type->isFloatTy()) 
+		return 32;
+
+	if (type->isDoubleTy()) 
+		return 64;
+
+	
 
 	return 0;
 }
@@ -135,7 +139,7 @@ void MemoryAnnotator::annotateAllocaInst(AllocaInst *inst)
 	Value *args[4] = {cast, arraySize, stride, alignment};
 	ArrayRef<Value *> argArray(args, 4);
 	outs() << *cast << ", array=[" << *arraySize << "], stride=" << *stride << ", align" << *alignment << "\n";
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_allocation"), argArray );
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_allocation_integer"), argArray );
 	tracker->insertAfter(cast);
 	outs() << "----------------------------\n";
 }
@@ -168,6 +172,15 @@ void MemoryAnnotator::annotateFree(CallInst *inst)
 	outs() << "----------------------------\n";
 }
 
+CastInst *MemoryAnnotator::cast2SizeTy(Value *value)
+{
+	if ( !CastInst::isCastable(value->getType(), SizeTy) )
+			outs() << "ERROR: non-castable types in load...\n";
+
+	return CastInst::CreateZExtOrBitCast(value, SizeTy);
+
+}
+
 void MemoryAnnotator::annotateLoad(LoadInst *inst)
 {
 	outs() << "--------" << *inst << "--------\n";
@@ -178,7 +191,7 @@ void MemoryAnnotator::annotateLoad(LoadInst *inst)
 
 	Type *loadedTy = inst->getType();
 	llvm::DataLayout DL(module);
-	Constant *stride = ConstantInt::get( SizeTy, DL.getTypeStoreSize(loadedTy) );
+	Constant *stride = ConstantInt::get( SizeTy, DL.getTypeStoreSize(loadedTy) * 8 );
 
 	Value *loadPtr = inst->getPointerOperand();
 	if (loadPtr->getType() != VoidPtrTy) {
@@ -186,15 +199,59 @@ void MemoryAnnotator::annotateLoad(LoadInst *inst)
 		castPtr->insertBefore(inst);
 		loadPtr = castPtr;
 	}
+
+	// value
+	outs() << *inst << ", loadPtr=" << *loadPtr << ", stride=" << *stride << "\n";
+	Instruction *pos = inst;
+	Value *loadee = inst;
+	if (!loadedTy->isIntegerTy(64)) {
+		CastInst *castLoad = cast2SizeTy(inst);
+		castLoad->insertAfter(inst);
+		pos = castLoad;
+		loadee = castLoad;
+	}
 	
-	Value *args[] = {loadPtr, stride, alignment};
-	ArrayRef<Value *> argArray(args, 3);
-	outs() << *inst << " " << *loadPtr << "\n";
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_load"), argArray );
-	tracker->insertAfter(inst);
+	Value *args[] = {loadPtr, stride, alignment, loadee};
+	ArrayRef<Value *> argArray(args, 4);
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_load_integer"), argArray );
+	tracker->insertAfter(pos);
 	outs() << "----------------------------\n";
 }
 
+void MemoryAnnotator::annotateStore(StoreInst *inst)
+{
+	outs() << "--------" << *inst << "--------\n";
+
+	// alignment
+	unsigned align = inst->getAlignment();
+	Constant *alignment = ConstantInt::get( SizeTy, align );
+
+	// pointer
+	Value *storePtr = inst->getPointerOperand();
+	if (storePtr->getType() != VoidPtrTy) {
+		CastInst *castPtr = CastInst::CreatePointerCast (storePtr, VoidPtrTy);
+		castPtr->insertBefore(inst);
+		storePtr = castPtr;
+	}
+
+	// value
+	Value *storee = inst->getValueOperand();
+	Type *storedTy = storee->getType();
+	llvm::DataLayout DL(module);
+	Constant *stride = ConstantInt::get( SizeTy, DL.getTypeStoreSize(storedTy) * 8 );
+
+	if (!storedTy->isIntegerTy(64)) {
+		CastInst *castStore = cast2SizeTy(storee);
+		castStore->insertBefore(inst);
+		storee = castStore;
+	}
+
+	Value *args[] = {storePtr, stride, alignment, storee};
+	ArrayRef<Value *> argArray(args, 4);
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_store_integer"), argArray );
+	tracker->insertAfter(inst);
+	outs() << "----------------------------\n";
+}
 
 void MemoryAnnotator::annotateInstruction(Instruction& I)
 {

@@ -7,7 +7,7 @@
 #define __WEAK_INLINE __attribute__((__weak__,__always_inline__)) 
 
 __WEAK_INLINE
-void __track_stack_allocation(void *ptr, size_t array, size_t stride, size_t alignment)
+void __track_stack_allocation_integer(void *ptr, size_t array, size_t stride, size_t alignment)
 {
 	printf ("alloca %p [%ld x i%ld], align %ld\n", ptr, array, stride, alignment);
 } 
@@ -25,9 +25,15 @@ void __track_heap_free(void *ptr)
 } 
 
 __WEAK_INLINE
-void __track_load(void *ptr, size_t stride, size_t alignment)
+void __track_load_integer(void *ptr, size_t stride, size_t alignment, size_t value)
 {
-	printf ("load %p [i%ld], align %ld\n", ptr, stride, alignment);
+	printf ("load %p [i%ld], align %ld => %ld\n", ptr, stride, alignment, value);
+} 
+
+__WEAK_INLINE
+void __track_store_integer(void *ptr, size_t stride, size_t alignment, size_t value)
+{
+	printf ("store %p [i%ld], align %ld <= %ld\n", ptr, stride, alignment, value);
 }
 
 #endif

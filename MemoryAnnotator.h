@@ -32,11 +32,13 @@ private:
 	void setEnv(llvm::Module& M);
 	unsigned getStrideWidth(llvm::Type *type);
 	uint64_t getArraySize(llvm::Type *type);
+	llvm::CastInst *cast2SizeTy(llvm::Value *value);
 
 	void annotateAllocaInst(llvm::AllocaInst *inst);
 	void annotateMalloc(llvm::CallInst *inst);
 	void annotateFree(llvm::CallInst *inst);
 	void annotateLoad(llvm::LoadInst *inst);
+	void annotateStore(llvm::StoreInst *inst);
 
 public:
 	static char ID;
