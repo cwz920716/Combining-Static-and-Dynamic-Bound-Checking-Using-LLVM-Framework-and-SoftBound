@@ -27,12 +27,20 @@ void MemoryAnnotator::setEnv(Module& M)
 
 	Type *types[] = {VoidPtrTy, SizeTy, SizeTy, SizeTy};
 	FunctionType *trackStackAllocaTy = FunctionType::get( VoidTy, types, false );
-	allocaTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation", module );
+	allocaStackTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation", module );
 	// module->getOrInsertFunction("__track_stack_allocation", allocaTrack);
 
 	Type *types2[] = {VoidPtrTy, SizeTy};
 	FunctionType *trackHeapAllocaTy = FunctionType::get( VoidTy, types2, false );
 	mallocTrack = Function::Create( trackHeapAllocaTy, Function::ExternalLinkage, "__track_heap_allocation", module );
+
+	Type *types3[] = {VoidPtrTy};
+	FunctionType *trackHeapFreeTy = FunctionType::get( VoidTy, types3, false );
+	freeTrack = Function::Create( trackHeapFreeTy, Function::ExternalLinkage, "__track_heap_free", module );
+
+	Type *types4[] = {VoidPtrTy, SizeTy, SizeTy};
+	FunctionType *trackLoadTy = FunctionType::get( VoidTy, types4, false );
+	loadTrack = Function::Create( trackLoadTy, Function::ExternalLinkage, "__track_load", module );
 
 }
 
@@ -143,7 +151,48 @@ void MemoryAnnotator::annotateMalloc(CallInst *inst)
 	outs() << *inst << " " << *mallocSize << "\n";
 	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_allocation"), argArray );
 	tracker->insertAfter(inst);
-	outs() << "----------------------------------------------------\n";
+	outs() << "----------------------------\n";
+}
+
+void MemoryAnnotator::annotateFree(CallInst *inst)
+{
+	outs() << "--------" << *inst << "--------\n";
+
+	Value *freePtr = inst->getArgOperand(0);
+	
+	Value *args[] = {freePtr};
+	ArrayRef<Value *> argArray(args, 1);
+	outs() << *inst << " " << *freePtr << "\n";
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_free"), argArray );
+	tracker->insertAfter(inst);
+	outs() << "----------------------------\n";
+}
+
+void MemoryAnnotator::annotateLoad(LoadInst *inst)
+{
+	outs() << "--------" << *inst << "--------\n";
+
+	// alignment
+	unsigned align = inst->getAlignment();
+	Constant *alignment = ConstantInt::get( SizeTy, align );
+
+	Type *loadedTy = inst->getType();
+	llvm::DataLayout DL(module);
+	Constant *stride = ConstantInt::get( SizeTy, DL.getTypeStoreSize(loadedTy) );
+
+	Value *loadPtr = inst->getPointerOperand();
+	if (loadPtr->getType() != VoidPtrTy) {
+		CastInst *castPtr = CastInst::CreatePointerCast (loadPtr, VoidPtrTy);
+		castPtr->insertBefore(inst);
+		loadPtr = castPtr;
+	}
+	
+	Value *args[] = {loadPtr, stride, alignment};
+	ArrayRef<Value *> argArray(args, 3);
+	outs() << *inst << " " << *loadPtr << "\n";
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_load"), argArray );
+	tracker->insertAfter(inst);
+	outs() << "----------------------------\n";
 }
 
 
@@ -166,6 +215,21 @@ void MemoryAnnotator::annotateInstruction(Instruction& I)
 		if (callee->getName() == "malloc") {
 			annotateMalloc(call);
 		}
+
+		if (callee->getName() == "free") {
+			annotateFree(call);
+		}
+	}
+
+	if (isa<LoadInst>(inst)) {
+		LoadInst *load = dyn_cast<LoadInst>(inst);
+		annotateLoad(load);
+	}
+
+	if (isa<StoreInst>(inst)) {
+		// not done yet...
+		StoreInst *store = dyn_cast<StoreInst>(inst);
+		annotateStore(store);
 	}
 
 }

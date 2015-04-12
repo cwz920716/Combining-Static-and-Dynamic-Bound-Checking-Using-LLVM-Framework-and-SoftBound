@@ -13,6 +13,7 @@
 
 #include "llvm/Pass.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/DataLayout.h"
 
 namespace cs380c
 {
@@ -22,7 +23,7 @@ private:
 	// Private field declaration here
 	llvm::Module *module;
 	llvm::Type *VoidTy, *VoidPtrTy, *SizeTy, *Int32Ty;
-	llvm::Function *allocaTrack, *deallocaTrack, *mallocTrack, *freeTrack, *storeTrack, *loadTrack;
+	llvm::Function *allocaStackTrack, *saveStackTrack, *restoreStackTrack, *mallocTrack, *freeTrack, *storeTrack, *loadTrack;
 
 	void annotateFunction(llvm::Function&);
 	void annotateBasicBlock(llvm::BasicBlock&);
@@ -34,6 +35,8 @@ private:
 
 	void annotateAllocaInst(llvm::AllocaInst *inst);
 	void annotateMalloc(llvm::CallInst *inst);
+	void annotateFree(llvm::CallInst *inst);
+	void annotateLoad(llvm::LoadInst *inst);
 
 public:
 	static char ID;
