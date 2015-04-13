@@ -27,22 +27,31 @@ void MemoryAnnotator::setEnv(Module& M)
 
 	Type *types[] = {VoidPtrTy, SizeTy, SizeTy, SizeTy};
 	FunctionType *trackStackAllocaTy = FunctionType::get( VoidTy, types, false );
-	allocaStackTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation_integer", module );
+	allocaStackTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation_integer_after", module );
 	// module->getOrInsertFunction("__track_stack_allocation", allocaTrack);
 
 	Type *types2[] = {VoidPtrTy, SizeTy};
 	FunctionType *trackHeapAllocaTy = FunctionType::get( VoidTy, types2, false );
-	mallocTrack = Function::Create( trackHeapAllocaTy, Function::ExternalLinkage, "__track_heap_allocation", module );
+	mallocTrack = Function::Create( trackHeapAllocaTy, Function::ExternalLinkage, "__track_heap_allocation_after", module );
 
 	Type *types3[] = {VoidPtrTy};
+
 	FunctionType *trackHeapFreeTy = FunctionType::get( VoidTy, types3, false );
-	freeTrack = Function::Create( trackHeapFreeTy, Function::ExternalLinkage, "__track_heap_free", module );
+	freeTrack = Function::Create( trackHeapFreeTy, Function::ExternalLinkage, "__track_heap_free_before", module );
+
+	FunctionType *trackStackSaveTy = FunctionType::get( VoidTy, types3, false );
+	saveStackTrack = Function::Create( trackStackSaveTy, Function::ExternalLinkage, "__track_stack_save_after", module );
+
+	FunctionType *trackStackRestoreTy = FunctionType::get( VoidTy, types3, false );
+	restoreStackTrack = Function::Create( trackStackRestoreTy, Function::ExternalLinkage, "__track_stack_restore_before", module );
 
 	Type *types4[] = {VoidPtrTy, SizeTy, SizeTy, SizeTy};
+
 	FunctionType *trackLoadTy = FunctionType::get( VoidTy, types4, false );
-	loadTrack = Function::Create( trackLoadTy, Function::ExternalLinkage, "__track_load_integer", module );
+	loadTrack = Function::Create( trackLoadTy, Function::ExternalLinkage, "__track_load_integer_after", module );
+
 	FunctionType *trackStoreTy = FunctionType::get( VoidTy, types4, false );
-	storeTrack = Function::Create( trackStoreTy, Function::ExternalLinkage, "__track_store_integer", module );
+	storeTrack = Function::Create( trackStoreTy, Function::ExternalLinkage, "__track_store_integer_before", module );
 
 }
 
@@ -139,7 +148,7 @@ void MemoryAnnotator::annotateAllocaInst(AllocaInst *inst)
 	Value *args[4] = {cast, arraySize, stride, alignment};
 	ArrayRef<Value *> argArray(args, 4);
 	outs() << *cast << ", array=[" << *arraySize << "], stride=" << *stride << ", align" << *alignment << "\n";
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_allocation_integer"), argArray );
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_allocation_integer_after"), argArray );
 	tracker->insertAfter(cast);
 	outs() << "----------------------------\n";
 }
@@ -153,7 +162,7 @@ void MemoryAnnotator::annotateMalloc(CallInst *inst)
 	Value *args[2] = {inst, mallocSize};
 	ArrayRef<Value *> argArray(args, 2);
 	outs() << *inst << " " << *mallocSize << "\n";
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_allocation"), argArray );
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_allocation_after"), argArray );
 	tracker->insertAfter(inst);
 	outs() << "----------------------------\n";
 }
@@ -167,8 +176,36 @@ void MemoryAnnotator::annotateFree(CallInst *inst)
 	Value *args[] = {freePtr};
 	ArrayRef<Value *> argArray(args, 1);
 	outs() << *inst << " " << *freePtr << "\n";
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_free"), argArray );
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_free_before"), argArray );
+	tracker->insertBefore(inst);
+	outs() << "----------------------------\n";
+}
+
+void MemoryAnnotator::annotateStackSave(CallInst *inst)
+{
+	outs() << "--------" << *inst << "--------\n";
+
+	Value *stackSavePtr = inst;
+	
+	Value *args[] = {stackSavePtr};
+	ArrayRef<Value *> argArray(args, 1);
+	outs() << *inst << " " << *stackSavePtr << "\n";
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_save_after"), argArray );
 	tracker->insertAfter(inst);
+	outs() << "----------------------------\n";
+}
+
+void MemoryAnnotator::annotateStackRestore(CallInst *inst)
+{
+	outs() << "--------" << *inst << "--------\n";
+
+	Value *stackRestorePtr = inst->getArgOperand(0);
+	
+	Value *args[] = {stackRestorePtr};
+	ArrayRef<Value *> argArray(args, 1);
+	outs() << *inst << " " << *stackRestorePtr << "\n";
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_restore_before"), argArray );
+	tracker->insertBefore(inst);
 	outs() << "----------------------------\n";
 }
 
@@ -213,7 +250,7 @@ void MemoryAnnotator::annotateLoad(LoadInst *inst)
 	
 	Value *args[] = {loadPtr, stride, alignment, loadee};
 	ArrayRef<Value *> argArray(args, 4);
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_load_integer"), argArray );
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_load_integer_after"), argArray );
 	tracker->insertAfter(pos);
 	outs() << "----------------------------\n";
 }
@@ -248,8 +285,8 @@ void MemoryAnnotator::annotateStore(StoreInst *inst)
 
 	Value *args[] = {storePtr, stride, alignment, storee};
 	ArrayRef<Value *> argArray(args, 4);
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_store_integer"), argArray );
-	tracker->insertAfter(inst);
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_store_integer_before"), argArray );
+	tracker->insertBefore(inst);
 	outs() << "----------------------------\n";
 }
 
@@ -275,6 +312,14 @@ void MemoryAnnotator::annotateInstruction(Instruction& I)
 
 		if (callee->getName() == "free") {
 			annotateFree(call);
+		}
+
+		if (callee->getName() == "llvm.stacksave") {
+			annotateStackSave(call);
+		}
+
+		if (callee->getName() == "llvm.stackrestore") {
+			annotateStackRestore(call);
 		}
 	}
 

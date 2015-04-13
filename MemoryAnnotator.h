@@ -39,6 +39,8 @@ private:
 	void annotateFree(llvm::CallInst *inst);
 	void annotateLoad(llvm::LoadInst *inst);
 	void annotateStore(llvm::StoreInst *inst);
+	void annotateStackSave(llvm::CallInst *inst);
+	void annotateStackRestore(llvm::CallInst *inst);
 
 public:
 	static char ID;
