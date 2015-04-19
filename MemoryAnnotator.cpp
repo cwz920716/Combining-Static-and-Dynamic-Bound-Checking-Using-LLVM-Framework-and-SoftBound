@@ -24,15 +24,16 @@ void MemoryAnnotator::setEnv(Module& M)
 	VoidPtrTy = PointerType::getUnqual(Type::getInt8Ty(module->getContext()));
 	SizeTy = Type::getInt64Ty(module->getContext());
 	Int32Ty = Type::getInt32Ty(module->getContext());
+	FatPtrTy = StructType::get(Int32Ty, Int32Ty, NULL);
 
-	Type *types[] = {VoidPtrTy, SizeTy, SizeTy, SizeTy};
+	Type *types[] = {VoidPtrTy, VoidPtrTy, VoidPtrTy};
 	FunctionType *trackStackAllocaTy = FunctionType::get( VoidTy, types, false );
-	allocaStackTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation_integer_after", module );
+	allocaStackTrack = Function::Create( trackStackAllocaTy, Function::ExternalLinkage, "__track_stack_allocation_bound_after", module );
 	// module->getOrInsertFunction("__track_stack_allocation", allocaTrack);
 
-	Type *types2[] = {VoidPtrTy, SizeTy};
+	Type *types2[] = {VoidPtrTy, VoidPtrTy, VoidPtrTy};
 	FunctionType *trackHeapAllocaTy = FunctionType::get( VoidTy, types2, false );
-	mallocTrack = Function::Create( trackHeapAllocaTy, Function::ExternalLinkage, "__track_heap_allocation_after", module );
+	mallocTrack = Function::Create( trackHeapAllocaTy, Function::ExternalLinkage, "__track_heap_allocation_bound_after", module );
 
 	Type *types3[] = {VoidPtrTy};
 
@@ -75,6 +76,7 @@ void MemoryAnnotator::annotateBasicBlock(BasicBlock& BB)
 	}
 }
 
+// @unused
 unsigned MemoryAnnotator::getStrideWidth(Type *type) 
 {
 	if (type->isArrayTy()) {
@@ -101,6 +103,7 @@ unsigned MemoryAnnotator::getStrideWidth(Type *type)
 	return 0;
 }
 
+// @unused
 uint64_t MemoryAnnotator::getArraySize(Type *type) 
 {
 	if (type->isArrayTy()) {
@@ -110,10 +113,9 @@ uint64_t MemoryAnnotator::getArraySize(Type *type)
 		return 1;
 }
 
-void MemoryAnnotator::annotateAllocaInst(AllocaInst *inst)
+#if 0
+static void alloca_saved(AllocaInst *inst)
 {
-	outs() << "----" << *inst << "----\n";
-
 	// alignment
 	unsigned align = inst->getAlignment();
 	Constant *alignment = ConstantInt::get( SizeTy, align );
@@ -141,15 +143,37 @@ void MemoryAnnotator::annotateAllocaInst(AllocaInst *inst)
 		outs() << "WARNING: non-static alloca require handling of stack save/restore\n";
 	}
 
+	outs() << *cast << ", array=[" << *arraySize << "], stride=" << *stride << ", align" << *alignment << "\n";
+}
+#endif
+
+void MemoryAnnotator::annotateAllocaInst(AllocaInst *inst)
+{
+	outs() << "----" << *inst << "----\n";
+
 	// Allocated Ptr 
+	Type *allocatedTy = inst->getAllocatedType();
 	CastInst *cast = CastInst::CreatePointerCast (inst, VoidPtrTy);
 	cast->insertAfter(inst);
+
+	// Base Ptr
+	CastInst *base = cast;
+	bases.insert(std::make_pair(inst, base));
+	// base->insertAfter(inst);
+
+	// Bound Ptr
+	llvm::DataLayout DL(module);
+	Constant *length = ConstantInt::get( SizeTy, DL.getTypeStoreSize(allocatedTy) );
+	Value *index[] = {length};
+	ArrayRef<Value *> indexList(index, 1);
+	GetElementPtrInst *bound = GetElementPtrInst::Create(base, indexList);
+	bound->insertAfter(base);
+	bounds.insert(std::make_pair(inst, bound));
 	
-	Value *args[4] = {cast, arraySize, stride, alignment};
-	ArrayRef<Value *> argArray(args, 4);
-	outs() << *cast << ", array=[" << *arraySize << "], stride=" << *stride << ", align" << *alignment << "\n";
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_allocation_integer_after"), argArray );
-	tracker->insertAfter(cast);
+	Value *args[] = {cast, base, bound};
+	ArrayRef<Value *> argArray(args, 3);
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_stack_allocation_bound_after"), argArray );
+	tracker->insertAfter(bound);
 	outs() << "----------------------------\n";
 }
 
@@ -158,12 +182,24 @@ void MemoryAnnotator::annotateMalloc(CallInst *inst)
 	outs() << "--------" << *inst << "--------\n";
 
 	Value *mallocSize = inst->getArgOperand(0);
+
+	// Base Ptr
+	Instruction *base = inst; // CastInst::CreatePointerCast (inst, VoidPtrTy);
+	bases.insert(std::make_pair(inst, base));
+	// base->insertAfter(inst);
+
+	// Bound Ptr
+	Value *index[] = {mallocSize};
+	ArrayRef<Value *> indexList(index, 1);
+	GetElementPtrInst *bound = GetElementPtrInst::Create(base, indexList);
+	bound->insertAfter(base);
+	bounds.insert(std::make_pair(inst, bound));
 	
-	Value *args[2] = {inst, mallocSize};
-	ArrayRef<Value *> argArray(args, 2);
+	Value *args[] = {inst, base, bound};
+	ArrayRef<Value *> argArray(args, 3);
 	outs() << *inst << " " << *mallocSize << "\n";
-	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_allocation_after"), argArray );
-	tracker->insertAfter(inst);
+	CallInst *tracker = CallInst::Create( module->getFunction("__track_heap_allocation_bound_after"), argArray );
+	tracker->insertAfter(bound);
 	outs() << "----------------------------\n";
 }
 
@@ -211,8 +247,10 @@ void MemoryAnnotator::annotateStackRestore(CallInst *inst)
 
 CastInst *MemoryAnnotator::cast2SizeTy(Value *value)
 {
-	if ( !CastInst::isCastable(value->getType(), SizeTy) )
+	if ( !CastInst::isCastable(value->getType(), SizeTy) ) {
 		outs() << "ERROR: non-castable types in load...\n";
+		return CastInst::CreateZExtOrBitCast( ConstantInt::get( SizeTy, 0 ), SizeTy);
+	}
 
 	if ( !CastInst::isBitCastable(value->getType(), SizeTy) ) {
 		outs() << "WARNING: non-bit castable, maybe a pointer...\n";
@@ -223,7 +261,6 @@ CastInst *MemoryAnnotator::cast2SizeTy(Value *value)
 	}
 
 	return CastInst::CreateZExtOrBitCast(value, SizeTy);
-
 }
 
 void MemoryAnnotator::annotateLoad(LoadInst *inst)
@@ -251,7 +288,6 @@ void MemoryAnnotator::annotateLoad(LoadInst *inst)
 	Value *loadee = inst;
 	if (!loadedTy->isIntegerTy(64)) {
 		CastInst *castLoad = cast2SizeTy(inst);
-		outs() << "yyy";
 		castLoad->insertAfter(inst);
 		pos = castLoad;
 		loadee = castLoad;
@@ -338,9 +374,19 @@ void MemoryAnnotator::annotateInstruction(Instruction& I)
 	}
 
 	if (isa<StoreInst>(inst)) {
-		// not done yet...
 		StoreInst *store = dyn_cast<StoreInst>(inst);
 		annotateStore(store);
+	}
+
+	if (isa<GetElementPtrInst>(inst)) {
+		// annotateGetElementPtr(inst)
+	}
+
+	if (isa<CastInst>(inst)) {
+		CastInst *cast = dyn_cast<CastInst>(inst);
+		if (cast->getDestTy()->isPointerTy()) {
+			// annotateCast(cast);
+		}
 	}
 
 }

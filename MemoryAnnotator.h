@@ -27,11 +27,16 @@ namespace cs380c
 class MemoryAnnotator: public llvm::ModulePass {
 private:
 	using InstSet = std::unordered_set<llvm::Instruction*>;
+	using BaseMap = llvm::ValueMap<llvm::Value *, llvm::Value *>;
+	using BoundMap = llvm::ValueMap<llvm::Value *, llvm::Value *>;
 
 	// Private field declaration here
 	llvm::Module *module;
 	llvm::Type *VoidTy, *VoidPtrTy, *SizeTy, *Int32Ty;
 	llvm::Function *allocaStackTrack, *saveStackTrack, *restoreStackTrack, *mallocTrack, *freeTrack, *storeTrack, *loadTrack;
+	llvm::StructType *FatPtrTy;
+	BaseMap bases;
+	BoundMap bounds;
 
 	void annotateFunction(llvm::Function&);
 	void annotateBasicBlock(llvm::BasicBlock&);

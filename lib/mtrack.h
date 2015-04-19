@@ -13,9 +13,21 @@ void __track_stack_allocation_integer_after(void *ptr, size_t array, size_t stri
 } 
 
 __WEAK_INLINE
+void __track_stack_allocation_bound_after(void *ptr, void *base, void *bound)
+{
+	printf ("alloca %p ptr_base = %p ptr_bound = %p\n", ptr, base, bound);
+} 
+
+__WEAK_INLINE
 void __track_heap_allocation_after(void *ptr, size_t size)
 {
 	printf ("call @malloc %p [%ld x i8]\n", ptr, size);
+} 
+
+__WEAK_INLINE
+void __track_heap_allocation_bound_after(void *ptr, void *base, void *bound)
+{
+	printf ("call @malloc %p ptr_base = %p ptr_bound = %p\n", ptr, base, bound);
 } 
 
 __WEAK_INLINE
