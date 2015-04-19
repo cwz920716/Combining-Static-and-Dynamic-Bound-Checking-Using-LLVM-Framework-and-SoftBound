@@ -7,19 +7,27 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include "llvm/Pass.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/DataLayout.h"
+
+#include <unordered_set>
+#include <unordered_map>
 
 namespace cs380c
 {
 
 class MemoryAnnotator: public llvm::ModulePass {
 private:
+	using InstSet = std::unordered_set<llvm::Instruction*>;
+
 	// Private field declaration here
 	llvm::Module *module;
 	llvm::Type *VoidTy, *VoidPtrTy, *SizeTy, *Int32Ty;
@@ -41,6 +49,8 @@ private:
 	void annotateStore(llvm::StoreInst *inst);
 	void annotateStackSave(llvm::CallInst *inst);
 	void annotateStackRestore(llvm::CallInst *inst);
+
+	void cloneFunction(llvm::Function *funct);
 
 public:
 	static char ID;

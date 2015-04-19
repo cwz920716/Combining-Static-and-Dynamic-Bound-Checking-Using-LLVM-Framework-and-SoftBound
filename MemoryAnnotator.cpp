@@ -58,6 +58,8 @@ void MemoryAnnotator::setEnv(Module& M)
 void MemoryAnnotator::annotateFunction(Function& F)
 {
 	// Annotate Function
+	if (F.getName() == "main")
+		cloneFunction(&F);
 	for (Function::iterator I = F.begin(), E = F.end(); 
 			I != E; ++I) {
 		annotateBasicBlock(*I);
@@ -95,8 +97,6 @@ unsigned MemoryAnnotator::getStrideWidth(Type *type)
 
 	if (type->isDoubleTy()) 
 		return 64;
-
-	
 
 	return 0;
 }
@@ -212,7 +212,15 @@ void MemoryAnnotator::annotateStackRestore(CallInst *inst)
 CastInst *MemoryAnnotator::cast2SizeTy(Value *value)
 {
 	if ( !CastInst::isCastable(value->getType(), SizeTy) )
-			outs() << "ERROR: non-castable types in load...\n";
+		outs() << "ERROR: non-castable types in load...\n";
+
+	if ( !CastInst::isBitCastable(value->getType(), SizeTy) ) {
+		outs() << "WARNING: non-bit castable, maybe a pointer...\n";
+		if (value->getType()->isPointerTy()) {
+			return CastInst::CreatePointerCast(value, SizeTy);
+		}
+
+	}
 
 	return CastInst::CreateZExtOrBitCast(value, SizeTy);
 
@@ -243,6 +251,7 @@ void MemoryAnnotator::annotateLoad(LoadInst *inst)
 	Value *loadee = inst;
 	if (!loadedTy->isIntegerTy(64)) {
 		CastInst *castLoad = cast2SizeTy(inst);
+		outs() << "yyy";
 		castLoad->insertAfter(inst);
 		pos = castLoad;
 		loadee = castLoad;
