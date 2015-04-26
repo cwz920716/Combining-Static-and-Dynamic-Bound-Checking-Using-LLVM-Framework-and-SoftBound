@@ -1,61 +1,130 @@
-#include "PointerAnnlysis.h"
+#include "PointerAnalysis.h"
 
 using namespace llvm;
 using namespace cs380c;
 
-void PointerAnalysis::setEnv()
+void PointerAnalysis::setEnv(Module& M)
 {
-	// llvm::DataLayout *DL = DL(module);
+	module = &M;
 }
 
-void PointerAnalysis::isaPointer(Instruction *inst)
+bool PointerAnalysis::runOnModule(Module& M)
 {
-	return inst->getType()->
+	setEnv(M);
+
+	// Remove the following line and before you write down your own codes
+	for (Module::iterator I = M.begin(), E = M.end(); 
+ 			I != E; ++I) {
+		localAnalysis( &(*I) );
+	}
+
+	return false;
 }
 
-void PointerAnnlysis::localAnalysis(Function *funct) 
+bool PointerAnalysis::isaPointer(Instruction *inst)
+{
+	return inst->getType()->isPointerTy();
+}
+
+// Arguments: Out-of-Bound
+// ConstantPointer: Not exist normally unless for NULL, NULL is OoB
+// Global Values: OoB for simplicity
+void PointerAnalysis::localAnalysis(Function *funct) 
 {
 	// transitive is the (inbound) pointers with constant, static bound
 	InstSet inbounds, transitives;
 	BoundMap bounds;
 	bool changed = false;
+	llvm::DataLayout DL(module);
+
+	do {
+	changed = false;
 
 	for(inst_iterator i = inst_begin(funct), e = inst_end(funct); i != e; ++i) {
 		Instruction* inst = &*i;
 		if (isaPointer(inst)) {
 			// handle a Pointer
-			if (isa<AllocaInst>(inst)) {
-				changed = changed ||
-						(getOrInsert(inst, inbounds)) || 
-						(getOrInsert(inst, transitives));
+			Type* deRefTy = inst->getType()->getContainedType(0);
+			uint64_t deBound = DL.getTypeStoreSize(deRefTy);
+
+			uint64_t bound = getConstantAllocSize(inst);
+			if (bound) {
+				bool insertB = testAndInsert(inst, inbounds);
+				bool insertT = testAndInsert(inst, transitives);
+				bounds[inst] = bound;
+				changed = changed | insertB | insertT;
 			}
 
 			if ( isa<PHINode>(inst) ) {
 				// possibly an inbound, but never transitive
+				const PHINode *phi = dyn_cast<PHINode>(inst);
+				bool allInbound = true;
+				for (unsigned i = 0; i < phi->getNumIncomingValues(); i++) {
+					Value *iv = phi->getIncomingValue(i);
+					if (!test(iv, inbounds)) {
+						allInbound = false;
+						break;
+					}
+				}
+				if (allInbound) {
+					bool insertB = testAndInsert(inst, inbounds);
+					changed = changed | insertB;
+				}
+				
 			}
 
-			if ( isa<CallInst> ) {
-				// malloc with constant == alloca
-				if ()
-			}
-
-			if ( isa<GetElementPtrInst>() ) {
+			if ( isa<GetElementPtrInst>(inst) ) {
 				// inbound && transitive && offset in range => inbound && transitive
+				GetElementPtrInst *gep_inst = dyn_cast<GetElementPtrInst>(inst);
+				Value *basePtr = gep_inst->getPointerOperand();
+				uint64_t origBound = bounds[basePtr];
+				APInt offset;
+				bool testB = test(basePtr, inbounds);
+				bool testT = test(basePtr, transitives);
+				bool testC = gep_inst->accumulateConstantOffset(DL, offset);
+				// should I convert to byte count?
+				uint64_t intOff = offset.getLimitedValue();
+				outs() << *inst << "offset=" << intOff;
+				bool testR = testC && (origBound > 0) && (intOff + deBound < origBound);
+				if ( testB && testT && testR ) {
+					bool insertB = testAndInsert(inst, inbounds);
+					bool insertT = testAndInsert(inst, transitives);
+					bounds[inst] = bounds[basePtr] - (intOff + deBound);
+					changed = changed | insertB | insertT;
+				}
 			}
 
-			if ( isa<CastInst>() ) {
+			if ( isa<CastInst>(inst) ) {
 				// inbound && transitive && bound decreased => inbound && transitive
+				CastInst *cast_inst = dyn_cast<CastInst>(inst);
+				if (cast_inst->getSrcTy()->isPointerTy()) {
+					Value *srcPtr = cast_inst->getOperand(0);
+					bool testB = test(srcPtr, inbounds);
+					bool testT = test(srcPtr, transitives);
+					uint64_t origBound = bounds[srcPtr];
+					bool testR = (origBound > 0) && (deBound < origBound);
+					if ( testB && testT && testR ) {
+						bool insertB = testAndInsert(inst, inbounds);
+						bool insertT = testAndInsert(inst, transitives);
+						bounds[inst] = origBound;
+						changed = changed | insertB | insertT;
+					}
+				}
 			
 			}
 
 			// default case: nothing change
 		}
 	}
+
+	} while (changed);
+
+	local[funct] = inbounds;
 }
 
-bool PointerAnalysis::getOrInsert(Instrunction *inst, InstSet &set)
+bool PointerAnalysis::testAndInsert(Instruction *inst, InstSet &set)
 {
-	if (set.count(inst) == 0) {
+	if (!test(inst, set)) {
 		set.insert(inst);
 		return true;
 	}
@@ -63,26 +132,42 @@ bool PointerAnalysis::getOrInsert(Instrunction *inst, InstSet &set)
 	return false;
 }
 
+bool PointerAnalysis::test(Value *v, InstSet &set)
+{
+	Instruction *inst = dyn_cast<Instruction>(v);
+	if (!inst) {
+		return false;
+	}
+
+	if (set.count(inst) == 0) {
+		return false;
+	}
+
+	return true;
+}
+
 uint64_t PointerAnalysis::getAllocaArraySize(AllocaInst *alloca_inst)
 {
 	Value* intBound = alloca_inst->getArraySize();
 	if (ConstantInt *ib = dyn_cast<ConstantInt>(intBound))
-		return ib->->getZExtValue();
+		return ib->getZExtValue();
 	else
 		return 0;
 }
 
-uint64_t PointerAnalysis::getConstantAllocSize(Instrunction *inst)
+uint64_t PointerAnalysis::getConstantAllocSize(Instruction *inst)
 {
-	if (isa<AllocaInst>) {
+	llvm::DataLayout DL(module);
+
+	if (isa<AllocaInst>(inst)) {
 		AllocaInst *alloca_inst = dyn_cast<AllocaInst>(inst);
 		Type *allocatedTy = alloca_inst->getAllocatedType();
-		uint64_t stride = DL->getTypeStoreSize(allocatedTy);
+		uint64_t stride = DL.getTypeStoreSize(allocatedTy);
 		uint64_t length = getAllocaArraySize(alloca_inst);
 		return stride * length;
 	}
 
-	if (isa<CallInst>) {
+	if (isa<CallInst>(inst)) {
 		CallInst *call_inst = dyn_cast<CallInst> (inst);
 		Function *callee = call_inst->getCalledFunction();
 
@@ -91,7 +176,7 @@ uint64_t PointerAnalysis::getConstantAllocSize(Instrunction *inst)
 		}
 
 		if (callee->getName() == "malloc") {
-			Value *mallocSize = inst->getArgOperand(0);
+			Value *mallocSize = call_inst->getArgOperand(0);
 			if (ConstantInt *ms = dyn_cast<ConstantInt>(mallocSize)) {
 				return ms->getZExtValue();
 			} else
@@ -103,3 +188,16 @@ uint64_t PointerAnalysis::getConstantAllocSize(Instrunction *inst)
 
 	return 0;
 }
+
+void PointerAnalysis::getAnalysisUsage(AnalysisUsage &AU) const
+{
+	AU.setPreservesCFG();
+}
+
+// LLVM uses the address of this static member to identify the pass, so the
+// initialization value is unimportant.
+char PointerAnalysis::ID = 0;
+
+// Register the pass name to allow it to be called with opt:
+// See http://llvm.org/releases/3.5.1/docs/WritingAnLLVMPass.html#running-a-pass-with-opt for more info.
+static RegisterPass<PointerAnalysis> X("ptranalysis", "Pointer Analysis for softbound");

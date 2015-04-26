@@ -8,6 +8,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -70,18 +71,20 @@ class PointerAnalysis: public llvm::ModulePass {
 private:
 	using Node = llvm::BasicBlock *;
 	using InstSet = std::unordered_set<llvm::Instruction*>;
-	using Value = InstSet;
-	using ValueSet = std::unordered_map< Node, Value >;
 	using BoundMap = std::unordered_map< llvm::Value *, uint64_t >;
-	using LocalSummary = std::unordered_map< llvm::Function *, ValueSet >;
+	using LocalSummary = std::unordered_map< llvm::Function *, InstSet >;
 	
 	// Private field declaration here
 	llvm::Module *module;
 	LocalSummary local;
-	
-	void localAnalysis(llvm::Function *);
 
 	void setEnv(llvm::Module& M);
+	bool isaPointer(llvm::Instruction *inst);
+	void localAnalysis(llvm::Function *funct);
+	bool testAndInsert(llvm::Instruction *inst, InstSet &set);
+	bool test(llvm::Value *v, InstSet &set);
+	uint64_t getAllocaArraySize(llvm::AllocaInst *alloca_inst);
+	uint64_t getConstantAllocSize(llvm::Instruction *inst);
 	
 public:
 	static char ID;

@@ -391,8 +391,6 @@ void MemoryAnnotator::annotateInstruction(Instruction& I)
 
 	if (isa<PHINode>(inst)) {
 		PHINode *phi = dyn_cast<PHINode>(inst);
-		if () {
-		}
 	}
 
 }
