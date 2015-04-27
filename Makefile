@@ -1,6 +1,6 @@
 CXXFLAGS = $(shell llvm-config --cxxflags) -fno-rtti
 
-all: mannotate.so ptranalysis.so
+all: ptranalysis.so
 lib: libtrack.a
 
 MemoryAnnotator.o: MemoryAnnotator.cpp MemoryAnnotator.h Makefile

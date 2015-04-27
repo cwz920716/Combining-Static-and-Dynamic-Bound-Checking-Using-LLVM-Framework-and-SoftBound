@@ -52,8 +52,11 @@ void PointerAnalysis::localAnalysis(Function *funct)
 				bool insertB = testAndInsert(inst, inbounds);
 				bool insertT = testAndInsert(inst, transitives);
 				bounds[inst] = bound;
+				outs() << "alloca: " << inst->getName() << ", b=" << bound << "\n";
 				changed = changed | insertB | insertT;
 			}
+
+			// TODO: handle dynamic allocated inst
 
 			if ( isa<PHINode>(inst) ) {
 				// possibly an inbound, but never transitive
@@ -78,14 +81,14 @@ void PointerAnalysis::localAnalysis(Function *funct)
 				GetElementPtrInst *gep_inst = dyn_cast<GetElementPtrInst>(inst);
 				Value *basePtr = gep_inst->getPointerOperand();
 				uint64_t origBound = bounds[basePtr];
-				APInt offset;
+				APInt offset(64, false);
 				bool testB = test(basePtr, inbounds);
 				bool testT = test(basePtr, transitives);
 				bool testC = gep_inst->accumulateConstantOffset(DL, offset);
 				// should I convert to byte count?
 				uint64_t intOff = offset.getLimitedValue();
-				outs() << *inst << "offset=" << intOff;
-				bool testR = testC && (origBound > 0) && (intOff + deBound < origBound);
+				outs() << "getelementptr: " << inst->getName() << ", offset=" << intOff << "\n";
+				bool testR = testC && (origBound > 0) && (intOff + deBound <= origBound);
 				if ( testB && testT && testR ) {
 					bool insertB = testAndInsert(inst, inbounds);
 					bool insertT = testAndInsert(inst, transitives);
@@ -102,7 +105,7 @@ void PointerAnalysis::localAnalysis(Function *funct)
 					bool testB = test(srcPtr, inbounds);
 					bool testT = test(srcPtr, transitives);
 					uint64_t origBound = bounds[srcPtr];
-					bool testR = (origBound > 0) && (deBound < origBound);
+					bool testR = (origBound > 0) && (deBound <= origBound);
 					if ( testB && testT && testR ) {
 						bool insertB = testAndInsert(inst, inbounds);
 						bool insertT = testAndInsert(inst, transitives);
@@ -119,6 +122,8 @@ void PointerAnalysis::localAnalysis(Function *funct)
 
 	} while (changed);
 
+	outs() << funct->getName() << ":\t";
+	printX(inbounds);
 	local[funct] = inbounds;
 }
 
@@ -187,6 +192,13 @@ uint64_t PointerAnalysis::getConstantAllocSize(Instruction *inst)
 	}
 
 	return 0;
+}
+
+void PointerAnalysis::printX(InstSet &set) {
+	outs() << "\tcnt=" << set.size() << " { ";
+	for (auto v: set)
+		outs() << v->getName() << " ";
+	outs() << "}\n";
 }
 
 void PointerAnalysis::getAnalysisUsage(AnalysisUsage &AU) const

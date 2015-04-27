@@ -85,6 +85,7 @@ private:
 	bool test(llvm::Value *v, InstSet &set);
 	uint64_t getAllocaArraySize(llvm::AllocaInst *alloca_inst);
 	uint64_t getConstantAllocSize(llvm::Instruction *inst);
+	void printX(InstSet &set);
 	
 public:
 	static char ID;
