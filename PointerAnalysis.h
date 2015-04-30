@@ -71,20 +71,36 @@ class PointerAnalysis: public llvm::ModulePass {
 private:
 	using Node = llvm::BasicBlock *;
 	using InstSet = std::unordered_set<llvm::Instruction*>;
+	using ValueSet = std::unordered_set<llvm::Value*>;
+	using NodeSet = std::unordered_set<Node>;
+	using ValueMap = std::unordered_map< llvm::Value *, ValueSet >; 
 	using BoundMap = std::unordered_map< llvm::Value *, uint64_t >;
+
+	using CallSet = std::unordered_set<llvm::CallInst*>;
+	using CallMap = std::unordered_map< llvm::CallInst *, ValueSet>;
 	using LocalSummary = std::unordered_map< llvm::Function *, InstSet >;
 	
 	// Private field declaration here
 	llvm::Module *module;
-	LocalSummary local;
+	LocalSummary contextFree;
+
+	// FSCS analysis, cannot solve point-to facts
+	ValueSet globals; // all globals are exact pointer
+	BoundMap exactBounds;
+
+	CallSet callsites;
+	CallMap exactArgsCall, boundArgsCall, ;
+
+	ValueSet EmptySet;
 
 	void setEnv(llvm::Module& M);
 	bool isaPointer(llvm::Instruction *inst);
-	void localAnalysis(llvm::Function *funct);
+	void contextFreeAnalysis(llvm::Function *funct);
 	bool testAndInsert(llvm::Instruction *inst, InstSet &set);
 	bool test(llvm::Value *v, InstSet &set);
 	uint64_t getAllocaArraySize(llvm::AllocaInst *alloca_inst);
 	uint64_t getConstantAllocSize(llvm::Instruction *inst);
+	bool isAllocation(llvm::Instruction *inst);
 	void printX(InstSet &set);
 	
 public:
