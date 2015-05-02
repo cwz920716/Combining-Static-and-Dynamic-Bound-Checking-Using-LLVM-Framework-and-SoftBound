@@ -111,6 +111,7 @@ private:
 	void objectAnalysis();
 	void printX(ValueSet &set);
 	bool unEqual (const ValueSet &a, const ValueSet &b);
+	bool isExternalLibrary(Instruction *inst);
 	
 public:
 	static char ID;

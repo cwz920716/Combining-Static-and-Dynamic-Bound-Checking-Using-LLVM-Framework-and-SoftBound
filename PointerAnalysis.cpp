@@ -3,6 +3,96 @@
 using namespace llvm;
 using namespace cs380c;
 
+static const char* noopFuncs[] = {
+	"log", "log10", "exp", "exp2", "exp10", "strcmp", "strncmp", "strlen",
+	"atoi", "atof",	"atol", "atoll", "remove", "unlink", "rename", "memcmp", "free",
+	"execl", "execlp", "execle", "execv", "execvp", "chmod",
+	"puts", "write", "open", "create", "truncate", "chdir", "mkdir", "rmdir",
+	"read", "pipe",	"wait", "time",	"stat", "fstat", "lstat", "strtod",	"strtof",
+	"strtold", "fopen", "fdopen", "fflush", "feof", "fileno", "clearerr", "rewind",
+	"ftell", "ferror", "fgetc",	"fgetc", "_IO_getc", "fwrite", "fread",	"fgets",
+	"ungetc", "fputc", "fputs", "putc",	"ftell", "rewind", "_IO_putc", "fseek",
+	"fgetpos", "fsetpos", "printf", "fprintf", "sprintf", "vprintf", "vfprintf",
+	"vsprintf", "scanf", "fscanf", "sscanf", "__assert_fail", "modf", "putchar",
+	"isalnum", "isalpha", "isascii", "isatty", "isblank", "iscntrl", "isdigit",
+	"isgraph", "islower", "isprint", "ispunct", "isspace", "isupper", "iswalnum",
+	"iswalpha", "iswctype", "iswdigit", "iswlower", "iswspace", "iswprint",
+	"iswupper", "sin", "cos", "sinf", "cosf", "asin", "acos", "tan", "atan",
+	"fabs", "pow", "floor", "ceil", "sqrt", "sqrtf", "hypot", 
+	"random", "tolower","toupper", "towlower", "towupper", "system", "clock",
+	"exit", "abort", "gettimeofday", "settimeofday", "sleep", "ctime",
+	"strspn", "strcspn", "localtime", "strftime",
+	"qsort", "popen", "pclose",
+	"rand", "rand_r", "srand", "seed48", "drand48", "lrand48", "srand48",
+	"__isoc99_sscanf", "__isoc99_fscanf", "fclose", "close", "perror", 
+	"strerror", // this function returns an extenal static pointer
+	"__errno_location", "__ctype_b_loc", "abs", "difftime", "setbuf",
+	"_ZdlPv", "_ZdaPv",	// delete and delete[]
+	"fesetround", "fegetround", "fetestexcept", "feraiseexcept", "feclearexcept",
+	"llvm.bswap.i16", "llvm.bswap.i32", "llvm.ctlz.i64",
+	"llvm.lifetime.start", "llvm.lifetime.end", "llvm.stackrestore",
+	"memset", "llvm.memset.i32", "llvm.memset.p0i8.i32", "llvm.memset.i64",
+	"llvm.memset.p0i8.i64", "llvm.va_end",
+	// The following functions might not be NOOP. They need to be removed from this list in the future
+	"setrlimit", "getrlimit",
+	nullptr
+};
+
+static const char* mallocFuncs[] = {
+	"malloc", "valloc", "calloc",
+	"_Znwj", "_ZnwjRKSt9nothrow_t", "_Znwm", "_ZnwmRKSt9nothrow_t", 
+	"_Znaj", "_ZnajRKSt9nothrow_t", "_Znam", "_ZnamRKSt9nothrow_t", 
+	"strdup", "strndup",
+	"getenv",
+	"memalign", "posix_memalign",
+	nullptr
+};
+
+static const char* reallocFuncs[] = {
+	"realloc", "strtok", "strtok_r", "getcwd",
+	nullptr
+};
+
+static const char* retArg0Funcs[] = {
+	"fgets", "gets", "stpcpy",  "strcat", "strchr", "strcpy",
+	"strerror_r", "strncat", "strncpy", "strpbrk", "strptime", "strrchr", "strstr",
+	nullptr
+};
+
+static const char* retArg1Funcs[] = {
+	// Actually the return value of signal() will NOT alias its second argument, but if you call it twice the return values may alias. We're making conservative assumption here
+	"signal",
+	nullptr
+};
+
+static const char* retArg2Funcs[] = {
+	"freopen",
+	nullptr
+};
+
+static const char* memcpyFuncs[] = {
+	"llvm.memcpy.i32", "llvm.memcpy.p0i8.p0i8.i32", "llvm.memcpy.i64",
+	"llvm.memcpy.p0i8.p0i8.i64", "llvm.memmove.i32", "llvm.memmove.p0i8.p0i8.i32",
+	"llvm.memmove.i64", "llvm.memmove.p0i8.p0i8.i64",
+	"memccpy", "memmove", "bcopy",
+	nullptr
+};
+
+static const char* convertFuncs[] = {
+	"strtod", "strtof", "strtol", "strtold", "strtoll", "strtoul",
+	nullptr
+};
+
+static bool lookupName(const char* table[], const char* str)
+{
+	for (unsigned i = 0; table[i] != nullptr; ++i)
+	{
+		if (strcmp(table[i], str) == 0)
+			return true;
+	}
+	return false;
+}
+
 void PointerAnalysis::setEnv(Module& M)
 {
 	module = &M;
@@ -207,9 +297,39 @@ uint64_t PointerAnalysis::getConstantAllocSize(Instruction *inst)
 				return ms->getZExtValue();
 			} else
 				return 0;
-		} else {
-			return 0;
 		}
+
+		if (callee->getName() == "valloc") {
+			Value *vallocSize = call_inst->getArgOperand(0);
+			if (ConstantInt *vs = dyn_cast<ConstantInt>(vallocSize)) {
+				return vs->getZExtValue();
+			} else
+				return 0;
+		}
+
+		if (callee->getName() == "calloc") {
+			Value *callocNmemb = call_inst->getArgOperand(0);
+			Value *callocSize = call_inst->getArgOperand(1);
+			ConstantInt *cn = dyn_cast<ConstantInt>(callocNmemb);
+			ConstantInt *cs = dyn_cast<ConstantInt>(callocSize);
+			if ( cn != nullptr && cs != nullptr ) {
+				return cn->getZExtValue() * cs->getZExtValue();
+			} else
+				return 0;
+		}
+
+		if (callee->getName() == "memalign") {
+			Value *mallocSize = call_inst->getArgOperand(1);
+			if (ConstantInt *ms = dyn_cast<ConstantInt>(mallocSize)) {
+				return ms->getZExtValue();
+			} else
+				return 0;
+		}
+
+		if (lookupName(reallocFuncs, callee->getName().data()) || lookupName(mallocFuncs, callee->getName().data()))
+			return 0;
+
+		
 	}
 
 	return 0;
@@ -235,7 +355,42 @@ bool PointerAnalysis::isAllocation(Instruction *inst)
 			return true;
 		}
 
+		if (callee->getName() == "valloc") {
+			return true;
+		}
+
+		if (callee->getName() == "calloc") {
+			return true;
+		}
+
+		if (callee->getName() == "memalign") {
+			return true;
+		}
+
+		if (lookupName(reallocFuncs, callee->getName().data()) || lookupName(mallocFuncs, callee->getName().data()))
+			return true;
+
 		return false;
+	}
+
+	return false;
+}
+
+bool PointerAnalysis::isExternalLibrary(Instruction *inst)
+{
+	if (isa<CallInst>(inst)) {
+		CallInst *call_inst = dyn_cast<CallInst> (inst);
+		Function *callee = call_inst->getCalledFunction();
+
+		if (lookupName(noopFuncs, callee->getName().data())
+			 || lookupName(mallocFuncs, callee->getName().data())
+			 || lookupName(reallocFuncs, callee->getName().data())
+			 || lookupName(retArg0Funcs, callee->getName().data())
+			 || lookupName(retArg1Funcs, callee->getName().data())
+			 || lookupName(retArg2Funcs, callee->getName().data())
+			 || lookupName(memcpyFuncs, callee->getName().data())
+			 || lookupName(convertFuncs, callee->getName().data()))
+			return true;
 	}
 
 	return false;
@@ -267,6 +422,9 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 	NodeSet visits;
 	ValueMap exactIn, exactOut, boundIn, boundOut;
 	llvm::DataLayout DL(module);
+
+	if ( funct->hasExternalLinkage() )
+		return;
 	
 	Node entry = &funct->getEntryBlock();
 	worklist.enqueue(entry);
@@ -314,6 +472,59 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 					// if they are the same, skip
 					// otherwise call it again
 				// }
+
+				CallInst *call_inst = dyn_cast<CallInst> (inst);
+				Function *callee = call_inst->getCalledFunction();
+
+				if (isExternalLibrary(inst)) {
+					bool isAlloca = isAllocation(inst);
+					int allocaSize = getConstantAllocSize(inst);
+					if (isAlloca) {
+						boundTemp.insert(inst);
+						if (allocaSize) {
+							exactTemp.insert(inst);
+							exactBounds[inst] = allocaSize;
+						}
+					}
+
+					if (isaPointer(inst)) {
+						if ( lookupName(retArg0Funcs, callee->getName().data()) ) {
+							Value *arg0 = call_inst->getArgOperand(0);
+							if (test(arg0, boundTemp)) {
+								boundTemp.insert(inst);
+							}
+							if (test(arg0, exactTemp)) {
+								exactTemp.insert(inst);
+								exactBounds[inst] = exactBounds[arg0];
+							}
+						}
+
+						if ( lookupName(retArg1Funcs, callee->getName().data()) ) {
+							Value *arg1 = call_inst->getArgOperand(1);
+							if (test(arg1, boundTemp)) {
+								boundTemp.insert(inst);
+							}
+							if (test(arg1, exactTemp)) {
+								exactTemp.insert(inst);
+								exactBounds[inst] = exactBounds[arg1];
+							}
+						}
+
+						if ( lookupName(retArg2Funcs, callee->getName().data()) ) {
+							Value *arg2 = call_inst->getArgOperand(2);
+							if (test(arg2, boundTemp)) {
+								boundTemp.insert(inst);
+							}
+							if (test(arg2, exactTemp)) {
+								exactTemp.insert(inst);
+								exactBounds[inst] = exactBounds[arg2];
+							}
+						}
+					}
+
+				} else {
+					
+				}				
 
 				continue;
 				
@@ -367,7 +578,7 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 				bool testC = gep_inst->accumulateConstantOffset(DL, offset);
 				// should I convert to byte count?
 				uint64_t intOff = offset.getLimitedValue();
-				outs() << "getelementptr: " << inst->getName() << ", offset=" << intOff << "\n";
+				// outs() << "getelementptr: " << inst->getName() << ", offset=" << intOff << "\n";
 				bool testR = testC && (origBound > 0) && (intOff + deBound <= origBound);
 				if ( testB && testE && testR ) {
 					boundTemp.insert(inst);
