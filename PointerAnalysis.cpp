@@ -13,10 +13,16 @@ bool PointerAnalysis::runOnModule(Module& M)
 	setEnv(M);
 
 	// Remove the following line and before you write down your own codes
+
 	for (Module::iterator I = M.begin(), E = M.end(); 
  			I != E; ++I) {
 		contextFreeAnalysis( &(*I) );
 	}
+
+	outs() << "---------------------------------------------------------------\n";
+	outs() << "---------------------------------------------------------------\n";
+	outs() << "---------------------------------------------------------------\n";
+	objectAnalysis();
 
 	return false;
 }
@@ -62,10 +68,6 @@ void PointerAnalysis::contextFreeAnalysis(Function *funct)
 				outs() << "dyn alloca: " << inst->getName() << "\n";
 				changed = changed | insertB;
 			}
-
-			// TODO: handle dynamic allocated inst
-			Type* deRefTy = inst->getType()->getContainedType(0);
-			uint64_t deBound = DL.getTypeStoreSize(deRefTy);
 
 			if ( isa<PHINode>(inst) ) {
 				// possibly an inbound, but never transitive
@@ -161,6 +163,15 @@ bool PointerAnalysis::test(Value *v, InstSet &set)
 	return true;
 }
 
+bool PointerAnalysis::test(Value *v, ValueSet &set)
+{
+	if (set.count(v) == 0) {
+		return false;
+	}
+
+	return true;
+}
+
 uint64_t PointerAnalysis::getAllocaArraySize(AllocaInst *alloca_inst)
 {
 	Value* intBound = alloca_inst->getArraySize();
@@ -230,7 +241,7 @@ bool PointerAnalysis::isAllocation(Instruction *inst)
 	return false;
 }
 
-ValueSet PointerAnalysis::merge(ValueSet a, ValueSet b)
+PointerAnalysis::ValueSet PointerAnalysis::merge(PointerAnalysis::ValueSet a, PointerAnalysis::ValueSet b)
 {
 	ValueSet r;
 	for (auto i : a)
@@ -240,7 +251,7 @@ ValueSet PointerAnalysis::merge(ValueSet a, ValueSet b)
 	return r;
 }
 
-ValueSet getOrInsert(const Node &n, ValueMap &s) {
+PointerAnalysis::ValueSet PointerAnalysis::getOrInsert(const PointerAnalysis::Node &n, PointerAnalysis::ValueMap &s) {
 	auto got = s.find(n);
 	if ( got == s.end() ) {
 		s.insert( std::make_pair(n, EmptySet) );
@@ -255,17 +266,26 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 	WorkList<Node> worklist;
 	NodeSet visits;
 	ValueMap exactIn, exactOut, boundIn, boundOut;
+	llvm::DataLayout DL(module);
 	
 	Node entry = &funct->getEntryBlock();
 	worklist.enqueue(entry);
+
+	std::unordered_set<Node> exits;
+	for (auto &bb: *funct)
+		if ( llvm::succ_begin(&bb) == llvm::succ_end(&bb) )
+			exits.insert(&bb);
 
 	while (!worklist.empty()) {
 		Node next = worklist.dequeue();
 		bool changed = false;
 	
-		bool visited = (visit.count(next) != 0);
-		visit.insert(next);
+		bool visited = (visits.count(next) != 0);
+		visits.insert(next);
 
+		outs() << "visiting " << next->getName() << "\n";
+
+		ValueSet oldExact = getOrInsert(next, exactOut), oldBound = getOrInsert(next, boundOut);
 		ValueSet exactTemp, boundTemp;
 
 		if (next == entry) {
@@ -279,8 +299,8 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 			}
 		}
 
-		for (auto const &i : *next) {
-			const Instruction *inst = &i;
+		for (auto &i : *next) {
+			Instruction *inst = &i;
 
 			if (isa<CallInst>(inst)) {
 				// do inter-procedual analysis
@@ -302,6 +322,9 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 			if (!isaPointer(inst))
 				continue;
 
+			Type* deRefTy = inst->getType()->getContainedType(0);
+			uint64_t deBound = DL.getTypeStoreSize(deRefTy);
+
 			// handle a Pointer
 			if ( isa<AllocaInst>(inst) ) {
 				AllocaInst *alloca_inst = dyn_cast<AllocaInst>(inst);
@@ -322,7 +345,7 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 				bool allInbound = true;
 				for (unsigned i = 0; i < phi->getNumIncomingValues(); i++) {
 					Value *iv = phi->getIncomingValue(i);
-					if (!test(iv, inbounds)) {
+					if (!test(iv, boundTemp)) {
 						allInbound = false;
 						break;
 					}
@@ -373,23 +396,46 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 
 			// TODO: handle load/store
 			// default case: nothing change
-			
 		}
+			
+		changed = !visited || unEqual(exactTemp, oldExact) || unEqual(boundTemp, oldBound);
 
 		if (changed) {
 			for (auto i = succ_begin(next); i != succ_end(next); ++i) {
 				worklist.enqueue(*i);
 			}
-		};
+		}
+
+		exactOut[next] = exactTemp;
+		boundOut[next] = boundTemp;
 	}
+
+	outs() << funct->getName() << ":\t";
+	for (auto bb: exits) {
+		outs() << bb->getName() << ":\n\t";
+		printX(boundOut[bb]);
+		outs() << "\n";
+	}
+}
+
+
+bool PointerAnalysis::unEqual (const ValueSet &a, const ValueSet &b) {
+	if (a.size() != b.size())
+		return true;
+
+	for (auto const& e : a)
+		if (b.count(e) == 0)
+			return true;
+
+	return false;
 }
 
 void PointerAnalysis::objectAnalysis()
 {
 	llvm::DataLayout DL(module);
 
-	for (auto globalVal: module->globals()) {
-		GlobalVariable *gv = dyn_cast<GlobalVariable>(GlobalVariable);
+	for (auto &globalVal: module->globals()) {
+		GlobalVariable *gv = dyn_cast<GlobalVariable>(&globalVal);
 		Type *gvt = gv->getType();
 		assert(gvt->isPointerTy());
 		globals.insert(gv);
@@ -397,13 +443,20 @@ void PointerAnalysis::objectAnalysis()
 	}
 
 	Function *main = module->getFunction("main");
-	if (main != nullptr)
+	if (main == nullptr)
 		return;
 
 	objectPass(main, EmptySet, EmptySet);
 }
 
 void PointerAnalysis::printX(InstSet &set) {
+	outs() << "\tcnt=" << set.size() << " { ";
+	for (auto v: set)
+		outs() << v->getName() << " ";
+	outs() << "}\n";
+}
+
+void PointerAnalysis::printX(ValueSet &set) {
 	outs() << "\tcnt=" << set.size() << " { ";
 	for (auto v: set)
 		outs() << v->getName() << " ";

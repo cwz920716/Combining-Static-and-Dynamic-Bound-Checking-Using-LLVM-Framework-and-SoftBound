@@ -68,7 +68,7 @@ public:
 };
 
 class PointerAnalysis: public llvm::ModulePass {
-private:
+public:
 	using Node = llvm::BasicBlock *;
 	using InstSet = std::unordered_set<llvm::Instruction*>;
 	using ValueSet = std::unordered_set<llvm::Value*>;
@@ -80,6 +80,7 @@ private:
 	using CallMap = std::unordered_map< llvm::CallInst *, ValueSet>;
 	using LocalSummary = std::unordered_map< llvm::Function *, InstSet >;
 	
+private:
 	// Private field declaration here
 	llvm::Module *module;
 	LocalSummary contextFree;
@@ -89,7 +90,7 @@ private:
 	BoundMap exactBounds;
 
 	CallSet callsites;
-	CallMap exactArgsCall, boundArgsCall, ;
+	CallMap exactArgsCall, boundArgsCall;
 
 	ValueSet EmptySet;
 
@@ -102,6 +103,14 @@ private:
 	uint64_t getConstantAllocSize(llvm::Instruction *inst);
 	bool isAllocation(llvm::Instruction *inst);
 	void printX(InstSet &set);
+
+	bool test(Value *v, ValueSet &set);
+	ValueSet merge(ValueSet a, ValueSet b);
+	ValueSet getOrInsert(const Node &n, ValueMap &s);
+	void objectPass(Function *funct, ValueSet exactArgs, ValueSet boundArgs);
+	void objectAnalysis();
+	void printX(ValueSet &set);
+	bool unEqual (const ValueSet &a, const ValueSet &b);
 	
 public:
 	static char ID;
