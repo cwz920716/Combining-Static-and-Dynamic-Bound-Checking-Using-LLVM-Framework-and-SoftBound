@@ -120,6 +120,18 @@ bool PointerAnalysis::runOnModule(Module& M)
 
 	objectAnalysis();
 
+	outs() << "---------------------------------------------------------------\n";
+	outs() << "---------------------------------------------------------------\n";
+	outs() << "---------------------------------------------------------------\n";
+
+	for (Module::iterator I = M.begin(), E = M.end(); 
+ 			I != E; ++I) {
+		Function *fp = &(*I);
+		outs() << "<<<<< " << fp->getName() <<" >>>>>\n";
+		printX(contextFree[fp]);
+		printX(local[fp]);
+	}
+
 	return false;
 }
 
@@ -157,11 +169,11 @@ void PointerAnalysis::contextFreeAnalysis(Function *funct)
 				bool insertB = testAndInsert(inst, inbounds);
 				bool insertT = testAndInsert(inst, transitives);
 				bounds[inst] = bound;
-				outs() << "alloca: " << inst->getName() << ", b=" << bound << "\n";
+				// outs() << "alloca: " << inst->getName() << ", b=" << bound << "\n";
 				changed = changed | insertB | insertT;
 			} else if (isAlloca) {
 				bool insertB = testAndInsert(inst, inbounds);
-				outs() << "dyn alloca: " << inst->getName() << "\n";
+				// outs() << "dyn alloca: " << inst->getName() << "\n";
 				changed = changed | insertB;
 			}
 
@@ -194,12 +206,12 @@ void PointerAnalysis::contextFreeAnalysis(Function *funct)
 				bool testC = gep_inst->accumulateConstantOffset(DL, offset);
 				// should I convert to byte count?
 				uint64_t intOff = offset.getLimitedValue();
-				outs() << "getelementptr: " << inst->getName() << ", offset=" << intOff << "\n";
+				// outs() << "getelementptr: " << inst->getName() << ", offset=" << intOff << "\n";
 				bool testR = testC && (origBound > 0) && (intOff + deBound <= origBound);
 				if ( testB && testT && testR ) {
 					bool insertB = testAndInsert(inst, inbounds);
 					bool insertT = testAndInsert(inst, transitives);
-					bounds[inst] = bounds[basePtr] - (intOff + deBound);
+					bounds[inst] = bounds[basePtr] - (intOff);
 					changed = changed | insertB | insertT;
 				}
 			}
@@ -412,6 +424,24 @@ PointerAnalysis::ValueSet PointerAnalysis::merge(PointerAnalysis::ValueSet a, Po
 	return r;
 }
 
+PointerAnalysis::ValueSet PointerAnalysis::join(PointerAnalysis::ValueSet a, PointerAnalysis::ValueSet b)
+{
+	ValueSet r;
+	for (auto i : a)
+		if (b.count(i))
+			r.insert(i);
+	return r;
+}
+
+void PointerAnalysis::joinWith(PointerAnalysis::ValueSet a, llvm::Function *funct)
+{
+	auto got = local.find(funct);
+	if ( got == local.end() ) {
+		local.insert( std::make_pair(funct, a) );
+	} else
+		local[funct] = join(a, local[funct]);
+}
+
 PointerAnalysis::ValueSet PointerAnalysis::getOrInsert(const PointerAnalysis::Node &n, PointerAnalysis::ValueMap &s) {
 	auto got = s.find(n);
 	if ( got == s.end() ) {
@@ -437,7 +467,8 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 	
 	llvm::DataLayout DL(module);
 
-	if (functs.count(funct) == 0)
+	// how to test no funct body?
+	if (funct->begin() == funct->end())
 		return ret;
 
 	for (auto &globalVal: module->globals()) {
@@ -695,10 +726,8 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 			}
 		}
 
-		outs() << "save....\n";
 		exactOut[next] = exactTemp;
 		boundOut[next] = boundTemp;
-		printX(boundTemp);
 	}
 
 	ArgumentAttributes retSet(exits.size());
@@ -707,6 +736,7 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 	int i = 0;
 	for (auto bb: exits) {
 		outs() << bb->getName() << ":\t";
+		joinWith(boundOut[bb], funct);
 		printX(boundOut[bb]);
 
 		Instruction *term_inst = bb->getTerminator();
@@ -806,10 +836,14 @@ void PointerAnalysis::printX(InstSet &set) {
 }
 
 void PointerAnalysis::printX(ValueSet &set) {
+	int cnt = 0;
 	outs() << "\tcnt=" << set.size() << " { ";
-	for (auto v: set)
+	for (auto v: set) {
 		outs() << v->getName() << " ";
-	outs() << "}\n";
+		if (!globals.count(v))
+			cnt++;
+	}
+	outs() << "} local=" << cnt << "\n";
 }
 
 void PointerAnalysis::printX(PointerAnalysis::ArgumentAttributes &set) {

@@ -83,7 +83,8 @@ public:
 	using CallSet = std::unordered_set<llvm::CallInst*>;
 	using CallMap = std::unordered_map< llvm::CallInst *, ArgumentAttributes>;
 	using ReturnMap = std::unordered_map< llvm::CallInst *, ArgumentAttributes>;
-	using LocalSummary = std::unordered_map< llvm::Function *, InstSet >;
+	using ContextFreeSummary = std::unordered_map< llvm::Function *, InstSet >;
+	using LocalSummary = std::unordered_map< llvm::Function *, ValueSet >;
 
 	static const ArgumentAttribute DYNBOUND_ATTR = 0;
 	static const ArgumentAttribute UNBOUND_ATTR = 0xffffffffffffffffUL;
@@ -91,7 +92,7 @@ public:
 private:
 	// Private field declaration here
 	llvm::Module *module;
-	LocalSummary contextFree;
+	ContextFreeSummary contextFree;
 
 	// FSCS analysis, cannot solve point-to facts
 	ValueSet globals; // all globals are exact pointer
@@ -101,6 +102,7 @@ private:
 	CallSet callsites;
 	CallMap argsCall;
 	ReturnMap retCall;
+	LocalSummary local;
 
 	ValueSet EmptySet;
 
@@ -124,6 +126,8 @@ private:
 	bool unEqual (const ValueSet &a, const ValueSet &b);
 	bool unEqual (const ArgumentAttributes &a, const ArgumentAttributes &b);
 	bool isExternalLibrary(Instruction *inst);
+	PointerAnalysis::ValueSet join(PointerAnalysis::ValueSet a, PointerAnalysis::ValueSet b);
+	void joinWith(PointerAnalysis::ValueSet a, llvm::Function *funct);
 	
 public:
 	static char ID;
