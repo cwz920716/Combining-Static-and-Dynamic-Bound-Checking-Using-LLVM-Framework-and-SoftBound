@@ -76,9 +76,17 @@ public:
 	using ValueMap = std::unordered_map< llvm::Value *, ValueSet >; 
 	using BoundMap = std::unordered_map< llvm::Value *, uint64_t >;
 
+	using ArgumentAttribute = uint64_t;
+	using ArgumentAttributes = std::vector<uint64_t>;
+
+	using FunctSet = std::unordered_set<llvm::Function*>;
 	using CallSet = std::unordered_set<llvm::CallInst*>;
-	using CallMap = std::unordered_map< llvm::CallInst *, ValueSet>;
+	using CallMap = std::unordered_map< llvm::CallInst *, ArgumentAttributes>;
+	using ReturnMap = std::unordered_map< llvm::CallInst *, ArgumentAttributes>;
 	using LocalSummary = std::unordered_map< llvm::Function *, InstSet >;
+
+	static const ArgumentAttribute DYNBOUND_ATTR = 0;
+	static const ArgumentAttribute UNBOUND_ATTR = 0xffffffffffffffffUL;
 	
 private:
 	// Private field declaration here
@@ -87,10 +95,12 @@ private:
 
 	// FSCS analysis, cannot solve point-to facts
 	ValueSet globals; // all globals are exact pointer
-	BoundMap exactBounds;
+	BoundMap globalBounds;
 
+	FunctSet functs;
 	CallSet callsites;
-	CallMap exactArgsCall, boundArgsCall;
+	CallMap argsCall;
+	ReturnMap retCall;
 
 	ValueSet EmptySet;
 
@@ -107,10 +117,12 @@ private:
 	bool test(Value *v, ValueSet &set);
 	ValueSet merge(ValueSet a, ValueSet b);
 	ValueSet getOrInsert(const Node &n, ValueMap &s);
-	void objectPass(Function *funct, ValueSet exactArgs, ValueSet boundArgs);
+	ArgumentAttributes objectPass(Function *funct, ArgumentAttributes argAttrs);
 	void objectAnalysis();
 	void printX(ValueSet &set);
+	void printX(ArgumentAttributes &set);
 	bool unEqual (const ValueSet &a, const ValueSet &b);
+	bool unEqual (const ArgumentAttributes &a, const ArgumentAttributes &b);
 	bool isExternalLibrary(Instruction *inst);
 	
 public:

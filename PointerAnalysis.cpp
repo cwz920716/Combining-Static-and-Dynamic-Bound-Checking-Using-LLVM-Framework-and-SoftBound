@@ -112,6 +112,12 @@ bool PointerAnalysis::runOnModule(Module& M)
 	outs() << "---------------------------------------------------------------\n";
 	outs() << "---------------------------------------------------------------\n";
 	outs() << "---------------------------------------------------------------\n";
+
+	for (Module::iterator I = M.begin(), E = M.end(); 
+ 			I != E; ++I) {
+		functs.insert( &(*I) );
+	}
+
 	objectAnalysis();
 
 	return false;
@@ -416,16 +422,49 @@ PointerAnalysis::ValueSet PointerAnalysis::getOrInsert(const PointerAnalysis::No
 	return got->second;
 }
 
-void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet boundArgs)
+PointerAnalysis::ArgumentAttributes 
+PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes argAttrs)
 {
+	ArgumentAttributes ret(1);
+	ret[0] = UNBOUND_ATTR;
+
 	WorkList<Node> worklist;
 	NodeSet visits;
-	ValueMap exactIn, exactOut, boundIn, boundOut;
+	ValueMap exactOut, boundOut;
+
+	ValueSet exactArgs, boundArgs;
+	BoundMap exactBounds;
+	
 	llvm::DataLayout DL(module);
 
-	if ( funct->hasExternalLinkage() )
-		return;
+	if (functs.count(funct) == 0)
+		return ret;
+
+	for (auto &globalVal: module->globals()) {
+		GlobalVariable *gv = dyn_cast<GlobalVariable>(&globalVal);
+		exactBounds[gv] = globalBounds[gv];
+	}
+
+	auto args = funct->arg_begin();
+	for (size_t i = 0; i < funct->arg_size(); i++) {
+		if (argAttrs[i] == UNBOUND_ATTR) {
+			++args;
+			continue;
+		}
+
+		Value *arg = &(*args);
+		boundArgs.insert( arg );
+		if (argAttrs[i] != DYNBOUND_ATTR) {
+			exactArgs.insert( arg );
+			exactBounds[arg] = argAttrs[i];
+		}
+		++args;
+	}
 	
+	outs() << "********** visiting " << funct->getName() << " **********\n";
+	printX(exactArgs);
+	printX(boundArgs);
+
 	Node entry = &funct->getEntryBlock();
 	worklist.enqueue(entry);
 
@@ -450,6 +489,7 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 			exactTemp = merge( exactTemp, exactArgs );
 			exactTemp = merge( exactTemp, globals );
 			boundTemp = merge( boundTemp, boundArgs );
+			boundTemp = merge( boundTemp, globals );
 		} else {
 			for (auto i = pred_begin(next); i != pred_end(next); ++i) {
 				exactTemp = merge( exactTemp, getOrInsert(*i, exactOut) );
@@ -463,18 +503,20 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 			if (isa<CallInst>(inst)) {
 				// do inter-procedual analysis
 				// what if I am calling some external library: handle that either
-				// if () {
+				// if (is a well-known exteral function) {
 					// some external library
 					// analyze it at best effort
 				// } else {
 					// not an external function
 					// compare the args to the last time we enter this callsite
-					// if they are the same, skip
-					// otherwise call it again
+					// if they are the same, skip (TODO: pull out what we've got last time)
+					// otherwise analyze it again
 				// }
 
 				CallInst *call_inst = dyn_cast<CallInst> (inst);
 				Function *callee = call_inst->getCalledFunction();
+				if (callee == nullptr)
+					continue;
 
 				if (isExternalLibrary(inst)) {
 					bool isAlloca = isAllocation(inst);
@@ -522,8 +564,44 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 						}
 					}
 
-				} else {
+				} else if ( !callee->isVarArg()) {
+					bool first = (callsites.count(call_inst) == 0);
 					
+					callsites.insert(call_inst);
+					auto oldArgs = argsCall[call_inst];
+					
+					ArgumentAttributes args(call_inst->getNumArgOperands());
+					for (unsigned i = 0; i < call_inst->getNumArgOperands(); i++) {
+						Value *argi = call_inst->getArgOperand(i);
+						if (exactTemp.count(argi))
+							args[i] = exactBounds[argi];
+						else if (boundTemp.count(argi))
+							args[i] = DYNBOUND_ATTR;
+						else
+							args[i] = UNBOUND_ATTR;
+							
+					}
+
+					outs() << ">>> begin call\n";
+					bool changed = first || ( unEqual(args, oldArgs) );
+					ArgumentAttributes r;
+					if (changed) {
+						r = objectPass(callee, args);
+						retCall[call_inst] = r;
+					} else {
+						r = retCall[call_inst];
+					}
+
+					assert("r must have size 1" && r.size() == 1);
+					outs() << ">>> return from call\n";
+
+					if (r[0] == DYNBOUND_ATTR)
+						boundTemp.insert( inst );
+					else if (r[0] != UNBOUND_ATTR) {
+						boundTemp.insert( inst );
+						exactTemp.insert( inst );
+						exactBounds[inst] = r[0];
+					}
 				}				
 
 				continue;
@@ -576,14 +654,14 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 				bool testB = test(basePtr, boundTemp);
 				bool testE = test(basePtr, exactTemp);
 				bool testC = gep_inst->accumulateConstantOffset(DL, offset);
-				// should I convert to byte count?
+				// should I convert to byte count? A: NO.
 				uint64_t intOff = offset.getLimitedValue();
 				// outs() << "getelementptr: " << inst->getName() << ", offset=" << intOff << "\n";
 				bool testR = testC && (origBound > 0) && (intOff + deBound <= origBound);
 				if ( testB && testE && testR ) {
 					boundTemp.insert(inst);
 					exactTemp.insert(inst);
-					exactBounds[inst] = exactBounds[basePtr] - (intOff + deBound);
+					exactBounds[inst] = exactBounds[basePtr] - (intOff);
 				}
 			}
 
@@ -617,16 +695,60 @@ void PointerAnalysis::objectPass(Function *funct, ValueSet exactArgs, ValueSet b
 			}
 		}
 
+		outs() << "save....\n";
 		exactOut[next] = exactTemp;
 		boundOut[next] = boundTemp;
+		printX(boundTemp);
 	}
 
-	outs() << funct->getName() << ":\t";
+	ArgumentAttributes retSet(exits.size());
+	bool hasUnbound = false, hasDynbound = false;
+	outs() << "<<< " << funct->getName() << " Returns :\n";
+	int i = 0;
 	for (auto bb: exits) {
-		outs() << bb->getName() << ":\n\t";
+		outs() << bb->getName() << ":\t";
 		printX(boundOut[bb]);
-		outs() << "\n";
+
+		Instruction *term_inst = bb->getTerminator();
+		ReturnInst *ret_inst = dyn_cast<ReturnInst>(term_inst);
+		if (ret_inst != nullptr) {
+			Value *retVal = ret_inst->getReturnValue();
+			if ( retVal == nullptr || (!exactOut[bb].count(retVal) && !boundOut[bb].count(retVal)) ) {
+				hasUnbound = true;
+				break;
+			}
+
+			if (exactOut[bb].count(retVal))
+				retSet[i++] = exactBounds[retVal];
+			else {
+				retSet[i++] = DYNBOUND_ATTR;
+				hasDynbound = true;
+			}
+		}
 	}
+	outs() << "<<<\n";
+
+	ArgumentAttribute ret0 = retSet[0];
+	for (int i = 0; i < retSet.size(); i++)
+		if (retSet[i] != ret0)
+			hasDynbound = true;
+
+	if (hasUnbound)
+		ret[0] = UNBOUND_ATTR;
+	else if (hasDynbound)
+		ret[0] = DYNBOUND_ATTR;
+	else {
+		ret[0] = ret0;
+	}
+
+	if (!funct->getReturnType()->isPointerTy()) {
+		assert( "If is not pointer muxt be unbound" &&
+			(ret[0] == UNBOUND_ATTR) );
+	}
+
+	printX(ret);
+
+	return ret;
 }
 
 
@@ -641,6 +763,17 @@ bool PointerAnalysis::unEqual (const ValueSet &a, const ValueSet &b) {
 	return false;
 }
 
+bool PointerAnalysis::unEqual (const ArgumentAttributes &a, const ArgumentAttributes &b) {
+	if (a.size() != b.size())
+		return true;
+
+	for (int i = 0; i < a.size(); i++)
+		if (a[i] != b[i])
+			return true;
+
+	return false;
+}
+
 void PointerAnalysis::objectAnalysis()
 {
 	llvm::DataLayout DL(module);
@@ -650,14 +783,19 @@ void PointerAnalysis::objectAnalysis()
 		Type *gvt = gv->getType();
 		assert(gvt->isPointerTy());
 		globals.insert(gv);
-		exactBounds[gv] = DL.getTypeStoreSize(gvt->getContainedType(0));
+		globalBounds[gv] = DL.getTypeStoreSize(gvt->getContainedType(0));
 	}
 
-	Function *main = module->getFunction("main");
-	if (main == nullptr)
+	Function *mainfp = module->getFunction("main");
+	if (mainfp == nullptr)
 		return;
 
-	objectPass(main, EmptySet, EmptySet);
+	ArgumentAttributes args( mainfp->arg_size() );
+	for (size_t i = 0; i < mainfp->arg_size(); i++) {
+		args[i] = UNBOUND_ATTR;
+	}
+
+	objectPass(mainfp, args);
 }
 
 void PointerAnalysis::printX(InstSet &set) {
@@ -671,6 +809,12 @@ void PointerAnalysis::printX(ValueSet &set) {
 	outs() << "\tcnt=" << set.size() << " { ";
 	for (auto v: set)
 		outs() << v->getName() << " ";
+	outs() << "}\n";
+}
+
+void PointerAnalysis::printX(PointerAnalysis::ArgumentAttributes &set) {
+	outs() << "\tcnt=" << set.size() << " { ";
+	outs() << set[0] << " ";
 	outs() << "}\n";
 }
 
