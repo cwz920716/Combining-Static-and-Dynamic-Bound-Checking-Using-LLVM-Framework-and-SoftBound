@@ -40,7 +40,7 @@ void FunctionClonePass::buildSCC(CallGraph &cg)
 	cg.dump();
 	for (int v = 0; v < V; v++) {
 		if (names[v]->getFunction())
-			outs() << names[v]->getFunction()->getName() << " belongs to SCC id=" << id[v] << "\n";
+			outs() << names[v]->getFunction()->getName() << " belongs to SCC id=" << id[v] << ", index=" << v << "\n";
 	}
 	
 }
@@ -87,10 +87,6 @@ void FunctionClonePass::dfs(CallGraph &cg, int v)
 
 FunctionClonePass::Context FunctionClonePass::stitch(FunctionClonePass::Context parent, int myId, int myCnt)
 {
-	int last = parent[parent.size() - 2];
-	if (last == myId)
-		return parent;
-
 	Context r = parent;
 	r.push_back(myId);
 	r.push_back(myCnt);
@@ -109,6 +105,7 @@ std::string FunctionClonePass::context2Str(FunctionClonePass::Context ctx)
 
 Function *FunctionClonePass::getClonedFunction(Function *funct, CallGraph &cg, FunctionClonePass::Context parent)
 {
+	int index = indexes[ cg[funct] ];
 	int sccId = id[ indexes[ cg[funct] ] ];
 	string nameSuff = funct->getName().str() + context2Str(parent); 
 
@@ -151,7 +148,10 @@ Function *FunctionClonePass::getClonedFunction(Function *funct, CallGraph &cg, F
 				continue;
 
 			// start clone...
-			FunctionClonePass::Context now = stitch(parent, sccId, ic);
+			int calleeSccId = id[ indexes[ cg[callee] ] ];
+			FunctionClonePass::Context now = parent;
+			if ( calleeSccId != sccId )
+				now = stitch(parent, index, ic);
 			Function *clone2 = getClonedFunction(callee, cg, now);
 			call_inst->setCalledFunction(clone2);
 			
@@ -166,8 +166,8 @@ Function *FunctionClonePass::getClonedFunction(Function *funct, CallGraph &cg, F
 bool FunctionClonePass::cloneMain(Function *funct, CallGraph &cg)
 {
 	FunctionClonePass::Context ctx;
-	int sccId = id[ indexes[ cg[funct] ] ];
-	ctx.push_back(sccId);
+	int index = indexes[ cg[funct] ];
+	ctx.push_back(index);
 
 	int ic = 0;
 	for(inst_iterator i = inst_begin(funct), e = inst_end(funct); 
