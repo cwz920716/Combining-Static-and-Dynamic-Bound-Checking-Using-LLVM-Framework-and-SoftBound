@@ -127,14 +127,13 @@ private:
 	bool unEqual (const ArgumentAttributes &a, const ArgumentAttributes &b);
 	bool isExternalLibrary(Instruction *inst);
 	PointerAnalysis::ValueSet join(PointerAnalysis::ValueSet a, PointerAnalysis::ValueSet b);
-	void joinWith(PointerAnalysis::ValueSet a, llvm::Function *funct);
-	
+	void joinWith(PointerAnalysis::ValueSet a, llvm::Function *funct);	
+
 public:
 	static char ID;
 	PointerAnalysis() : llvm::ModulePass(ID) {}
 
 	bool runOnModule(llvm::Module&);
-	// We don't modify the program, so we preserve all analyses
 	void getAnalysisUsage(llvm::AnalysisUsage &AU) const;
 };
 

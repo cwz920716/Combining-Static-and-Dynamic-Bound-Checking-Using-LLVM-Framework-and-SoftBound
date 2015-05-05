@@ -457,6 +457,8 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 {
 	ArgumentAttributes ret(1);
 	ret[0] = UNBOUND_ATTR;
+	ArgumentAttributes UNBOUND(1);
+	ret[0] = UNBOUND_ATTR;
 
 	WorkList<Node> worklist;
 	NodeSet visits;
@@ -493,6 +495,7 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 	}
 	
 	outs() << "********** visiting " << funct->getName() << " **********\n";
+	printX(argAttrs);
 	printX(exactArgs);
 	printX(boundArgs);
 
@@ -617,6 +620,9 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 					bool changed = first || ( unEqual(args, oldArgs) );
 					ArgumentAttributes r;
 					if (changed) {
+						argsCall[call_inst] = args;
+						retCall[call_inst] = UNBOUND;
+
 						r = objectPass(callee, args);
 						retCall[call_inst] = r;
 					} else {
@@ -847,8 +853,14 @@ void PointerAnalysis::printX(ValueSet &set) {
 }
 
 void PointerAnalysis::printX(PointerAnalysis::ArgumentAttributes &set) {
+	if (set.size() == 0) {
+		outs() << "\t{ empty }\n";
+		return;
+	}
+
 	outs() << "\tcnt=" << set.size() << " { ";
-	outs() << set[0] << " ";
+	for (int i = 0; i < set.size(); i++)
+		outs() << set[i] << " ";
 	outs() << "}\n";
 }
 
