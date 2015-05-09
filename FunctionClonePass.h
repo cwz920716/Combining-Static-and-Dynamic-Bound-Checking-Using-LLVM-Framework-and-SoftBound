@@ -19,6 +19,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/DataLayout.h"
 
+#include "CloneHelper.h"
+
 #include <unordered_set>
 #include <unordered_map>
 #include <stack>
@@ -27,16 +29,54 @@
 using namespace llvm;
 using namespace std;
 
+class FunctionClonePass;
+class FunctionDB;
+
+class FunctionClone {
+public:
+	using Context = std::vector<int>;
+	
+};
+
+class FunctionDB {
+public:
+	using CountDB = std::unordered_map<const Function *, int>;
+
+private:
+	int num_funct;
+	const int threshold = 10;
+	const int K = 10;
+	llvm::Module *module;
+	CountDB cdb;
+
+public:
+	FunctionDB() {}
+	void init(llvm::Module &M);
+
+	int getThreshold() { return threshold; }
+	int getK() { return K; }
+	bool skip(const llvm::Function *funct) { return cdb[funct] <= getThreshold()
+							|| lookupName(noopFuncs, funct->getName().data()); }
+
+	bool skip(const llvm::Function *funct, FunctionClone::Context *context) { 
+		return (context->size() / 2) <= K
+							|| lookupName(noopFuncs, funct->getName().data()); 
+	}
+
+	void runOnFunction(const llvm::Function& F);
+};
+
 class FunctionClonePass: public llvm::ModulePass {
 public:
 	using CGNodeSet = std::unordered_set<CallGraphNode *>;
 	using CallNodeIndexMap = std::unordered_map<CallGraphNode *, int>;
 	using CallNodeNameMap = std::unordered_map<int, CallGraphNode *>;
-	using Context = std::vector<int>;
+	using Context = FunctionClone::Context;
 
 private:
 	// Private field declaration here
 	llvm::Module *module;
+	FunctionDB db;
 
 	void setEnv(Module& M);
 

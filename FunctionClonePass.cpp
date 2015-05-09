@@ -3,9 +3,49 @@
 using namespace llvm;
 using namespace std;
 
+void FunctionDB::init(Module &M)
+{
+	module = &M;
+	num_funct = 0;
+
+	for (auto const& f: M) {
+		runOnFunction(f);
+	}
+	
+}
+
+void FunctionDB::runOnFunction(const Function& F)
+{
+	// Remove the following two lines before you write down your own codes
+	unsigned num_load = 0, num_store = 0, num_call = 0;
+
+	for (auto const& bb: F) {
+		for (auto const& i: bb) {
+			if (const LoadInst *ci = dyn_cast<LoadInst>(&i)) {
+				num_load++;
+			}
+			if (const LoadInst *ci = dyn_cast<LoadInst>(&i)) {
+				num_store++;
+			}
+			if (const CallInst *ci = dyn_cast<CallInst>(&i)) {
+				num_call++;
+			}
+		}
+	}
+
+	cdb[&F] = num_load + num_store * 2 + num_call * 10;
+
+	
+	if (cdb[&F] > getThreshold())
+		outs() << cdb[&F] << "\n";
+	
+	return;
+}
+
 void FunctionClonePass::setEnv(Module& M)
 {
 	module = &M;
+	db.init(M);
 }
 
 void FunctionClonePass::buildSCC(CallGraph &cg)
@@ -37,12 +77,13 @@ void FunctionClonePass::buildSCC(CallGraph &cg)
 			dfs(cg, v);
         }
 
+
 	cg.dump();
 	for (int v = 0; v < V; v++) {
 		if (names[v]->getFunction())
 			outs() << names[v]->getFunction()->getName() << " belongs to SCC id=" << id[v] << ", index=" << v << "\n";
 	}
-	
+
 }
 
 void FunctionClonePass::dfs(CallGraph &cg, int v)
@@ -96,9 +137,14 @@ FunctionClonePass::Context FunctionClonePass::stitch(FunctionClonePass::Context 
 std::string FunctionClonePass::context2Str(FunctionClonePass::Context ctx)
 {
 	std::string r = "_";
+	int c = 0;
 	for (auto i : ctx) {
-		r += std::to_string(i);
+		if (c % 2)
+			r += std::to_string(i);
+		else
+			r += std::to_string(i);
 		r += "_";
+		c++;
 	}
 	return r;
 }
@@ -144,7 +190,7 @@ Function *FunctionClonePass::getClonedFunction(Function *funct, CallGraph &cg, F
 		Instruction* inst = &*i;
 		if (CallInst *call_inst = dyn_cast<CallInst>(inst)) {
 			Function *callee = call_inst->getCalledFunction();
-			if (!callee)
+			if (!callee || callee->isDeclaration() || db.skip(callee))
 				continue;
 
 			// start clone...
@@ -175,7 +221,7 @@ bool FunctionClonePass::cloneMain(Function *funct, CallGraph &cg)
 		Instruction* inst = &*i;
 		if (CallInst *call_inst = dyn_cast<CallInst>(inst)) {
 			Function *callee = call_inst->getCalledFunction();
-			if (!callee)
+			if (!callee || callee->isDeclaration() || db.skip(callee))
 				continue;
 
 			// start clone...
