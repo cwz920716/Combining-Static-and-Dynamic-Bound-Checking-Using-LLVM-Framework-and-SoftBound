@@ -83,6 +83,14 @@ static const char* convertFuncs[] = {
 	nullptr
 };
 
+static uint64_t sizeOf(llvm::Type *ty, llvm::DataLayout &DL)
+{
+	if (ty->isSized())
+		return DL.getTypeStoreSize(ty);
+	else
+		return 0;
+}
+
 static bool lookupName(const char* table[], const char* str)
 {
 	for (unsigned i = 0; table[i] != nullptr; ++i)
@@ -97,6 +105,32 @@ void PointerAnalysis::setEnv(Module& M)
 {
 	module = &M;
 }
+
+void PointerAnalysis::annotateValue(Instruction* inst, Function *fp)
+{
+	Value* v = nullptr;
+	if(LoadInst* load = dyn_cast<LoadInst>(inst))
+		v = load->getPointerOperand();
+	else if(StoreInst* store = dyn_cast<StoreInst>(inst))
+		v = store->getPointerOperand();
+	else if(AtomicCmpXchgInst* cax = dyn_cast<AtomicCmpXchgInst>(inst))
+		v = cax->getPointerOperand();
+	else if(AtomicRMWInst* rmw = dyn_cast<AtomicRMWInst>(inst))
+		v = rmw->getPointerOperand();
+
+	if(!v)
+		return;
+
+	Instruction *vi = dyn_cast<Instruction>(inst);
+
+	bool inBound1 = (vi != nullptr) && contextFree[fp].count(vi);
+	bool inBound2 = local[fp].count(v);
+	bool inBound = inBound1 || inBound2;
+	LLVMContext& cxt = inst->getContext();
+	MDNode *MD = MDNode::get(cxt, MDString::get(cxt, (inBound) ? "in" : "out"));
+	inst->setMetadata("isInBound", MD);
+}
+
 
 bool PointerAnalysis::runOnModule(Module& M)
 {
@@ -132,6 +166,19 @@ bool PointerAnalysis::runOnModule(Module& M)
 		printX(local[fp]);
 	}
 
+	outs() << "---------------------------------------------------------------\n";
+	outs() << "---------------------------------------------------------------\n";
+	outs() << "---------------------------------------------------------------\n";
+
+	for (Module::iterator I = M.begin(), E = M.end(); 
+ 			I != E; ++I) {
+		Function *fp = &(*I);
+		for(inst_iterator II = inst_begin(fp), IE = inst_end(fp); 
+				II != IE; ++II) {
+			annotateValue(&*II, fp);
+		}
+	}
+
 	return false;
 }
 
@@ -158,8 +205,11 @@ void PointerAnalysis::contextFreeAnalysis(Function *funct)
 		Instruction* inst = &*i;
 		if (isaPointer(inst)) {
 			// handle a Pointer
-			Type* deRefTy = inst->getType()->getContainedType(0);
-			uint64_t deBound = DL.getTypeStoreSize(deRefTy);
+			PointerType *pty = dyn_cast<PointerType>(inst->getType());
+			Type* deRefTy = pty->getPointerElementType();
+			outs() << *inst << *deRefTy << "\n";
+			uint64_t deBound = sizeOf(deRefTy, DL);
+			outs() << "...\n";
 
 			bool isAlloca = isAllocation(inst);
 			uint64_t bound = getConstantAllocSize(inst);
@@ -296,7 +346,7 @@ uint64_t PointerAnalysis::getConstantAllocSize(Instruction *inst)
 	if (isa<AllocaInst>(inst)) {
 		AllocaInst *alloca_inst = dyn_cast<AllocaInst>(inst);
 		Type *allocatedTy = alloca_inst->getAllocatedType();
-		uint64_t stride = DL.getTypeStoreSize(allocatedTy);
+		uint64_t stride = sizeOf(allocatedTy, DL);
 		uint64_t length = getAllocaArraySize(alloca_inst);
 		return stride * length;
 	}
@@ -649,13 +699,13 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 				continue;
 
 			Type* deRefTy = inst->getType()->getContainedType(0);
-			uint64_t deBound = DL.getTypeStoreSize(deRefTy);
+			uint64_t deBound = sizeOf(deRefTy, DL);
 
 			// handle a Pointer
 			if ( isa<AllocaInst>(inst) ) {
 				AllocaInst *alloca_inst = dyn_cast<AllocaInst>(inst);
 				Type *allocatedTy = alloca_inst->getAllocatedType();
-				uint64_t stride = DL.getTypeStoreSize(allocatedTy);
+				uint64_t stride = sizeOf(allocatedTy, DL);
 				uint64_t length = getAllocaArraySize(alloca_inst);
 				boundTemp.insert(inst);
 				if (length) {
@@ -778,8 +828,9 @@ PointerAnalysis::objectPass(Function *funct, PointerAnalysis::ArgumentAttributes
 	}
 
 	if (!funct->getReturnType()->isPointerTy()) {
-		assert( "If is not pointer muxt be unbound" &&
-			(ret[0] == UNBOUND_ATTR) );
+		//assert( "If is not pointer muxt be unbound" &&
+		//	(ret[0] == UNBOUND_ATTR) );
+		ret[0] = UNBOUND_ATTR;
 	}
 
 	printX(ret);
@@ -819,7 +870,7 @@ void PointerAnalysis::objectAnalysis()
 		Type *gvt = gv->getType();
 		assert(gvt->isPointerTy());
 		globals.insert(gv);
-		globalBounds[gv] = DL.getTypeStoreSize(gvt->getContainedType(0));
+		globalBounds[gv] = sizeOf(gvt->getContainedType(0), DL);
 	}
 
 	Function *mainfp = module->getFunction("main");

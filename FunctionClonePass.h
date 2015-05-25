@@ -14,6 +14,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Support/CommandLine.h"
 
 #include "llvm/Pass.h"
 #include "llvm/IR/Instructions.h"
@@ -31,6 +32,13 @@ using namespace std;
 
 class FunctionClonePass;
 class FunctionDB;
+
+
+static cl::opt<bool>
+FULL_CLONE
+("full_clone",
+ cl::desc("enable full clone"),
+ cl::init(true));
 
 class FunctionClone {
 public:
@@ -55,12 +63,20 @@ public:
 
 	int getThreshold() { return threshold; }
 	int getK() { return K; }
-	bool skip(const llvm::Function *funct) { return cdb[funct] <= getThreshold()
-							|| lookupName(noopFuncs, funct->getName().data()); }
+	bool skip(const llvm::Function *funct) { 
+		if (FULL_CLONE)
+			return false;
 
-	bool skip(const llvm::Function *funct, FunctionClone::Context *context) { 
-		return (context->size() / 2) <= K
-							|| lookupName(noopFuncs, funct->getName().data()); 
+		return cdb[funct] <= getThreshold()
+				|| lookupName(noopFuncs, funct->getName().data()); 
+	}
+
+	bool skip(const llvm::Function *funct, FunctionClone::Context &context) { 
+		if (FULL_CLONE)
+			return false;
+
+		return (context.size() / 2) > getK()
+				|| lookupName(noopFuncs, funct->getName().data()); 
 	}
 
 	void runOnFunction(const llvm::Function& F);

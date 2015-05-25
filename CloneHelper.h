@@ -39,6 +39,7 @@ static const char* noopFuncs[] = {
 	"newstring",
 	"fillbuf",
 	"flushout",
+	nullptr
 };
 
 

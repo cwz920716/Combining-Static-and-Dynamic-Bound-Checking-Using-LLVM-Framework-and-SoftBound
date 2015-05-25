@@ -129,6 +129,8 @@ private:
 	PointerAnalysis::ValueSet join(PointerAnalysis::ValueSet a, PointerAnalysis::ValueSet b);
 	void joinWith(PointerAnalysis::ValueSet a, llvm::Function *funct);	
 
+	void annotateValue(Instruction* inst, Function *fp);
+
 public:
 	static char ID;
 	PointerAnalysis() : llvm::ModulePass(ID) {}

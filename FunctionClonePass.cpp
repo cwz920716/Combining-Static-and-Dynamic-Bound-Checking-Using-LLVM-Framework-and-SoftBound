@@ -190,14 +190,15 @@ Function *FunctionClonePass::getClonedFunction(Function *funct, CallGraph &cg, F
 		Instruction* inst = &*i;
 		if (CallInst *call_inst = dyn_cast<CallInst>(inst)) {
 			Function *callee = call_inst->getCalledFunction();
-			if (!callee || callee->isDeclaration() || db.skip(callee))
-				continue;
-
-			// start clone...
 			int calleeSccId = id[ indexes[ cg[callee] ] ];
 			FunctionClonePass::Context now = parent;
 			if ( calleeSccId != sccId )
 				now = stitch(parent, index, ic);
+
+			if (!callee || callee->isDeclaration() || db.skip(callee, now))
+				continue;
+
+			// start clone...
 			Function *clone2 = getClonedFunction(callee, cg, now);
 			call_inst->setCalledFunction(clone2);
 			

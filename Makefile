@@ -1,6 +1,6 @@
 CXXFLAGS = $(shell llvm-config --cxxflags) -fno-rtti
 
-all: ptranalysis.so
+all: fclone.so ptranalysis.so
 lib: libtrack.a
 
 MemoryAnnotator.o: MemoryAnnotator.cpp MemoryAnnotator.h Makefile
@@ -14,6 +14,10 @@ libtrack.a: lib/mtrack.cpp lib/mtrack.h
 PointerAnalysis.o: PointerAnalysis.cpp PointerAnalysis.h Makefile
 	$(CXX) $(CXXFLAGS) PointerAnalysis.cpp -c -o $@
 ptranalysis.so: PointerAnalysis.o
+	$(CXX) -shared $^ -o $@
+FunctionClonePass.o: FunctionClonePass.cpp FunctionClonePass.h Makefile
+	$(CXX) $(CXXFLAGS) FunctionClonePass.cpp -c -o $@
+fclone.so: FunctionClonePass.o
 	$(CXX) -shared $^ -o $@
 clean:
 	rm -f *.o *.so
